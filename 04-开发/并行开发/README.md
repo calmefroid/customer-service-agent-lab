@@ -96,6 +96,19 @@ feat/operations-console
 feat/evals-badcase
 ```
 
+当前 Git 与 worktree 基线：
+
+| 对话 | 分支 | worktree | 起点 |
+| --- | --- | --- | --- |
+| 01 Runtime | `feat/agent-runtime` | `worktrees/客服Agent实验室/runtime` | `contracts-v1` |
+| 02 Business | `feat/business-workflows` | `worktrees/客服Agent实验室/business` | `contracts-v1` |
+| 03 Knowledge | `feat/knowledge-rag` | `worktrees/客服Agent实验室/knowledge-rag` | `contracts-v1` |
+| 04 Consumer | `feat/consumer-experience` | `worktrees/客服Agent实验室/consumer` | `contracts-v1` |
+| 05 Operations | `feat/operations-console` | `worktrees/客服Agent实验室/operations` | `contracts-v1` |
+| 06 Evals | `feat/evals-badcase` | `worktrees/客服Agent实验室/evals` | `contracts-v1` |
+
+表中路径均位于 `/Users/lengwen/Workspace/ai-project/` 下。六个分支只表示开发环境已就绪，不表示已启动开发或获得修改公共契约的权限。
+
 ### 2. 五类公共契约（已冻结）
 
 权威定义位于 `应用工程/src/lib/contracts.ts`，版本常量为 `PUBLIC_CONTRACT_VERSION=1.0.0`，Git 标签为 `contracts-v1`：
