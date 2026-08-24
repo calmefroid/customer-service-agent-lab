@@ -1,5 +1,11 @@
-import type { KnowledgeArticle, KnowledgeTopic, TraceSource } from "@/lib/contracts";
-import { getPublishedKnowledgeByTopic } from "@/lib/knowledge-store";
+import type {
+  KnowledgeArticle,
+  KnowledgeRetrievalResult,
+  KnowledgeTopic,
+  TraceSource,
+} from "@/lib/contracts";
+import { getPublishedKnowledgeByTopic, retrievePublishedKnowledge } from "@/lib/knowledge-store";
+import type { KnowledgeSearchFilters } from "@/lib/rag/types";
 
 export interface KnowledgeRetrieval {
   article: KnowledgeArticle;
@@ -26,6 +32,14 @@ export async function retrieveKnowledge(topic: KnowledgeTopic): Promise<Knowledg
   const hit = await findKnowledge(topic);
   if (!hit) throw new Error(`NO_PUBLISHED_KNOWLEDGE:${topic}`);
   return hit;
+}
+
+/** Full query retrieval for runtime/Trace integration. Never returns a generated fallback. */
+export async function retrieveKnowledgeByQuery(
+  query: string,
+  filters?: KnowledgeSearchFilters,
+): Promise<KnowledgeRetrievalResult> {
+  return retrievePublishedKnowledge(query, filters).retrieval;
 }
 
 export async function searchKnowledge(topic: KnowledgeTopic): Promise<TraceSource> {
