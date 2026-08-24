@@ -1,24 +1,34 @@
 import type { OrderView, TraceSource } from "@/lib/contracts";
+import { DEMO_CUSTOMER_ID } from "@/lib/mock-data/business-fixtures";
+import { omsMockAdapter } from "@/lib/adapters/oms-mock-adapter";
+import { tmsMockAdapter } from "@/lib/adapters/tms-mock-adapter";
 
-const latestOrder: OrderView = {
-  id: "OD202608180236",
-  product: "悦享系列 LED 吸顶灯",
-  status: "运输中",
-  eta: "预计明天 18:00 前送达",
-  carrier: "顺丰速运",
-  trackingNo: "SF14900000628",
-  hotline: "95338",
-  events: [
-    { time: "今天 09:42", text: "快件已到达上海浦东集散中心", active: true },
-    { time: "昨天 23:18", text: "快件已从苏州转运中心发出" },
-    { time: "昨天 16:06", text: "商家已发货" },
-  ],
-};
+function displayTime(value: string): string {
+  return new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
+}
 
 export async function getLatestOrder(): Promise<{
   data: OrderView;
   sources: TraceSource[];
 }> {
+  const orderResult = await omsMockAdapter.getLatestOrder(DEMO_CUSTOMER_ID);
+  if (orderResult.status !== "success") throw new Error(orderResult.error.message);
+  const shipmentResult = await tmsMockAdapter.getShipment(orderResult.data.orderId);
+  if (shipmentResult.status !== "success") throw new Error(shipmentResult.error.message);
+
+  const latestOrder: OrderView = {
+    id: orderResult.data.orderId,
+    product: orderResult.data.productName,
+    status: orderResult.data.status === "shipped" ? "运输中" : orderResult.data.status,
+    eta: shipmentResult.data.eta,
+    carrier: shipmentResult.data.carrier,
+    trackingNo: shipmentResult.data.trackingNo,
+    hotline: shipmentResult.data.hotline,
+    events: shipmentResult.data.events
+      .slice()
+      .reverse()
+      .map((event, index) => ({ time: displayTime(event.occurredAt), text: event.description, active: index === 0 })),
+  };
   return {
     data: latestOrder,
     sources: [
@@ -26,13 +36,13 @@ export async function getLatestOrder(): Promise<{
         type: "business",
         sourceSystem: "OMS",
         recordId: latestOrder.id,
-        updatedAt: "2026-08-20T10:08:00+08:00",
+        updatedAt: orderResult.data.updatedAt,
       },
       {
         type: "business",
         sourceSystem: "TMS",
         recordId: latestOrder.trackingNo,
-        updatedAt: "2026-08-20T09:42:00+08:00",
+        updatedAt: shipmentResult.data.updatedAt,
       },
     ],
   };
