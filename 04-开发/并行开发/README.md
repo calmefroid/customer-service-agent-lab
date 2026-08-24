@@ -1,6 +1,6 @@
 # 客服 Agent 实验室并行开发计划
 
-**版本**：V1.0  
+**版本**：V1.1
 **日期**：2026-08-24  
 **目标**：将当前可运行原型推进为结构清晰、可评测、可持续迭代的本地 Sandbox MVP，并让多个开发对话可以安全并行。
 
@@ -96,9 +96,9 @@ feat/operations-console
 feat/evals-badcase
 ```
 
-### 2. 先冻结五类公共契约
+### 2. 五类公共契约（已冻结）
 
-以下内容由 00 对话先定义，未冻结前功能对话只能做内部实现，不得同时改 `contracts.ts`：
+权威定义位于 `应用工程/src/lib/contracts.ts`，版本常量为 `PUBLIC_CONTRACT_VERSION=1.0.0`，Git 标签为 `contracts-v1`：
 
 1. `AgentEvent`：`progress`、`token`、`ui`、`final`、`error`。
 2. `ToolResult<T>`：成功、空结果、超时、业务拒绝、系统失败、来源元数据。
@@ -106,7 +106,17 @@ feat/evals-badcase
 4. `KnowledgeRetrievalResult`：候选、采用条目、冲突、无知识、过滤原因和引用。
 5. `TraceEvent`：模型、路由、RAG、工具、规则、确认、输出和错误。
 
-契约冻结后打一个基线标签，例如 `contracts-v1`。任何功能对话需要改公共契约时，不直接修改共享文件，而是在 `04-开发/并行开发/变更申请/` 写一条变更申请，由 00 对话统一处理。
+冻结的判别字段如下，功能模块不得自建同名替代协议：
+
+| 契约 | 冻结判别值 / 关键字段 |
+| --- | --- |
+| `AgentEvent` | `progress`、`token`、`ui`、`final`、`error`；所有事件带版本、事件 ID、session、序号和时间 |
+| `ToolResult<T>` | `success`、`empty`、`timeout`、`business_error`、`system_error`；统一 `data / error / meta` |
+| `ConfirmationRequest` | 操作、目标、草稿快照、风险、确认令牌、幂等键、有效期 |
+| `KnowledgeRetrievalResult` | `hit`、`no_hit`、`conflict`、`expired`；候选、采用项、过滤原因、冲突和引用 |
+| `TraceEvent` | `model`、`route`、`rag`、`tool`、`rule`、`confirmation`、`output`、`error` |
+
+任何功能对话需要改公共契约时，不直接修改共享文件，而是在 `04-开发/并行开发/变更申请/` 写一条变更申请，由 00 对话统一评估、修改和升级版本。
 
 ### 3. 明确数据是“演示持久化”还是“进程内临时”
 
@@ -128,6 +138,7 @@ P0 合并完成后再决定是否换 SQLite；不要让多个功能对话各自�
 
 - `src/lib/contracts.ts`
 - `src/lib/mock-orchestrator.ts`
+- `src/lib/orchestration/**`
 - `src/app/api/chat/route.ts` 的最终组装部分
 - `package.json`、`pnpm-lock.yaml`
 - `.env.example`
@@ -145,6 +156,13 @@ P0 合并完成后再决定是否换 SQLite；不要让多个功能对话各自�
 | 04 Consumer | `src/app/page.tsx`、`src/app/globals.css`、`src/components/chat/**`、`src/lib/public-progress.ts`、`src/app/api/feedback/**`、`src/lib/stores/feedback-store.ts`、`tests/consumer/**` |
 | 05 Operations | `src/app/ops/**`、`src/app/api/ops/**`、`src/lib/operations/**`、`tests/operations/**` |
 | 06 Evals | `src/app/evals/**`、`src/app/api/evals/**`、`src/lib/evals/**`、`evals/**`、`tests/evals/**` |
+
+所有权执行规则：
+
+- 更具体的路径优先于通配目录；例如 `knowledge-mock-adapter.ts` 归 03，尽管其位于 02 的 `adapters/**` 通配目录中。
+- owner 之外的对话不得直接提交对应目录改动；需要跨模块时提交变更申请或把建议 patch 交给 owner。
+- `src/lib/orchestration/**` 由 00 维护注册和装配，功能模块只导出实现，不反向依赖页面或其他模块的具体 Mock 数据。
+- 合并目标统一为 `main`；功能分支不得互相合并，只能同步 `main` 后交由 00 串行合并。
 
 ## 五、各模块详细目标
 
@@ -312,6 +330,15 @@ flowchart LR
 - `pnpm build` 通过。
 - 不包含 `.env.local`、真实业务数据、个人信息或 Key。
 - 消费者响应没有新增 debug 字段。
+
+本地 CI 等价门禁命令为：
+
+```bash
+cd 04-开发/应用工程
+pnpm check
+```
+
+该命令串行执行全量 Vitest 与 Next.js 生产构建。契约冻结时基线为 28 项测试。
 
 ## 八、多个对话之间怎么沟通
 

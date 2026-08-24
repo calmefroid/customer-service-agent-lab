@@ -14,6 +14,12 @@ export type RiskLevel = "low" | "medium" | "high";
 export type ServiceModule = "logistics" | "return" | "repair";
 export type RouteModule = ServiceModule | "knowledge" | "conversation" | "handoff";
 
+/**
+ * Cross-module contracts are frozen under this version. Changes require an
+ * approved request in `04-开发/并行开发/变更申请/` and a version bump.
+ */
+export const PUBLIC_CONTRACT_VERSION = "1.0.0" as const;
+
 export type KnowledgeTopic =
   | "product"
   | "return"
@@ -188,6 +194,247 @@ export interface ChatResponse {
   route?: RouteDecision;
   ui?: ChatUi;
 }
+
+export const AGENT_EVENT_TYPES = ["progress", "token", "ui", "final", "error"] as const;
+export type AgentEventType = (typeof AGENT_EVENT_TYPES)[number];
+
+export interface AgentEventBase {
+  contractVersion: typeof PUBLIC_CONTRACT_VERSION;
+  eventId: string;
+  sessionId: string;
+  sequence: number;
+  createdAt: string;
+  traceId?: string;
+}
+
+export type AgentEvent =
+  | (AgentEventBase & {
+      type: "progress";
+      progress: {
+        stage: string;
+        label: string;
+        status: "started" | "completed" | "failed";
+        durationMs?: number;
+      };
+    })
+  | (AgentEventBase & {
+      type: "token";
+      messageId: string;
+      delta: string;
+    })
+  | (AgentEventBase & {
+      type: "ui";
+      ui: ChatUi;
+    })
+  | (AgentEventBase & {
+      type: "final";
+      response: ChatResponse;
+    })
+  | (AgentEventBase & {
+      type: "error";
+      error: AgentPublicError;
+    });
+
+export interface AgentPublicError {
+  code: string;
+  message: string;
+  retryable: boolean;
+}
+
+export const TOOL_RESULT_STATUSES = [
+  "success",
+  "empty",
+  "timeout",
+  "business_error",
+  "system_error",
+] as const;
+export type ToolResultStatus = (typeof TOOL_RESULT_STATUSES)[number];
+
+export type ToolErrorCode =
+  | "EMPTY_RESULT"
+  | "TIMEOUT"
+  | "BUSINESS_REJECTED"
+  | "INVALID_INPUT"
+  | "NOT_FOUND"
+  | "UNAUTHORIZED"
+  | "CONFLICT"
+  | "SYSTEM_FAILURE"
+  | "CANCELLED";
+
+export interface DataSourceMetadata {
+  sourceSystem: "PCMP" | "OMS" | "WMS" | "TMS" | "CRM" | "CustomerKnowledgeBase" | string;
+  adapterType: "mock" | "live";
+  requestId: string;
+  recordId?: string;
+  sourceUpdatedAt?: string;
+}
+
+export interface ToolResultMetadata {
+  requestId: string;
+  sources: DataSourceMetadata[];
+  durationMs: number;
+  attempts: number;
+}
+
+export interface ToolError {
+  code: ToolErrorCode;
+  message: string;
+  retryable: boolean;
+  details?: Record<string, unknown>;
+}
+
+export type ToolResult<T> =
+  | {
+      status: "success";
+      data: T;
+      error?: never;
+      meta: ToolResultMetadata;
+    }
+  | {
+      status: Exclude<ToolResultStatus, "success">;
+      data: null;
+      error: ToolError;
+      meta: ToolResultMetadata;
+    };
+
+export type ConfirmationOperation =
+  | "order_change"
+  | "order_cancel"
+  | "logistics_urge"
+  | "return_exchange_create"
+  | "service_ticket_create";
+
+export interface ConfirmationRequest<TDraft extends Record<string, unknown> = Record<string, unknown>> {
+  confirmationRequestId: string;
+  sessionId: string;
+  traceId: string;
+  operation: ConfirmationOperation;
+  target: {
+    type: "order" | "shipment" | "return_request" | "service_ticket";
+    id: string;
+    label?: string;
+  };
+  draftSnapshot: Readonly<TDraft>;
+  riskLevel: RiskLevel;
+  risks: string[];
+  confirmationToken: string;
+  idempotencyKey: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
+export interface ConfirmationDecision<TSnapshot extends Record<string, unknown> = Record<string, unknown>> {
+  confirmationRequestId: string;
+  action: "confirm" | "modify" | "cancel";
+  finalSnapshot?: Readonly<TSnapshot>;
+  decidedAt: string;
+}
+
+export const KNOWLEDGE_RETRIEVAL_STATUSES = ["hit", "no_hit", "conflict", "expired"] as const;
+export type KnowledgeRetrievalStatus = (typeof KNOWLEDGE_RETRIEVAL_STATUSES)[number];
+
+export interface KnowledgeRetrievalFilter {
+  status: "published";
+  productId?: string;
+  productCategory?: string;
+  channel?: string;
+  region?: string;
+  effectiveAt: string;
+}
+
+export interface KnowledgeCitation {
+  articleId: string;
+  version: string;
+  excerpt: string;
+}
+
+export interface KnowledgeRetrievalCandidate {
+  articleId: string;
+  version: string;
+  title: string;
+  score: number;
+  excerpt: string;
+  adopted: boolean;
+  adoptionReason?: string;
+  filterReasons: string[];
+  citation?: KnowledgeCitation;
+}
+
+export interface KnowledgeConflict {
+  articleIds: string[];
+  reason: string;
+}
+
+export interface KnowledgeRetrievalResult {
+  status: KnowledgeRetrievalStatus;
+  query: string;
+  filters: KnowledgeRetrievalFilter;
+  candidates: KnowledgeRetrievalCandidate[];
+  selectedArticleIds: string[];
+  conflicts: KnowledgeConflict[];
+  citations: KnowledgeCitation[];
+  requestId: string;
+  durationMs: number;
+}
+
+export const TRACE_EVENT_TYPES = [
+  "model",
+  "route",
+  "rag",
+  "tool",
+  "rule",
+  "confirmation",
+  "output",
+  "error",
+] as const;
+export type TraceEventType = (typeof TRACE_EVENT_TYPES)[number];
+
+interface TraceEventBase<TType extends TraceEventType, TPayload> {
+  contractVersion: typeof PUBLIC_CONTRACT_VERSION;
+  eventId: string;
+  traceId: string;
+  sessionId: string;
+  sequence: number;
+  createdAt: string;
+  type: TType;
+  status: "started" | "completed" | "failed" | "skipped";
+  durationMs?: number;
+  payload: TPayload;
+}
+
+export type TraceEvent =
+  | TraceEventBase<"model", {
+      provider: string;
+      model: string;
+      mode: "mock" | "live";
+      inputSummary?: string;
+      outputSummary?: string;
+    }>
+  | TraceEventBase<"route", {
+      selected?: RouteDecision;
+      candidates: Array<{ intent: Intent; topic: string; score: number }>;
+    }>
+  | TraceEventBase<"rag", KnowledgeRetrievalResult>
+  | TraceEventBase<"tool", {
+      toolName: string;
+      operation: string;
+      result: ToolResult<unknown>;
+    }>
+  | TraceEventBase<"rule", {
+      ruleId: string;
+      matched: boolean;
+      evidence: string[];
+      effect: string;
+    }>
+  | TraceEventBase<"confirmation", {
+      request: ConfirmationRequest;
+      decision?: ConfirmationDecision;
+    }>
+  | TraceEventBase<"output", {
+      audience: "consumer" | "operations" | "internal";
+      summary: string;
+    }>
+  | TraceEventBase<"error", AgentPublicError & { internalCode?: string }>;
 
 export interface TraceSource {
   type: "business" | "knowledge" | "rule";

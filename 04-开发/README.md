@@ -49,7 +49,9 @@ pnpm install
 pnpm dev
 ```
 
-默认使用 Mock 模式，不需要 OpenAI API Key。测试使用 `pnpm test`，生产构建检查使用 `pnpm build`。
+默认使用 Mock 模式，不需要 OpenAI API Key。测试使用 `pnpm test`，生产构建检查使用 `pnpm build`；提交集成分支前统一运行 `pnpm check`，一次完成全量测试与生产构建。
+
+跨模块公共契约已冻结为 `contracts-v1`，权威定义在 `应用工程/src/lib/contracts.ts`。对话入口已通过模块注册层兼容现有 Mock 编排器，后续功能模块不得直接复制或修改公共契约。
 
 多人或多对话并行开发前，请先阅读 `并行开发/README.md`。当前项目尚未初始化 Git，不应让多个对话直接在同一个 `应用工程` 目录同时改代码；应先建立基线提交，再按任务简报创建独立 branch + worktree。
 

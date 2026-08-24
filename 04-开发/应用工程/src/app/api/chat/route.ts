@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import type { ChatRequest } from "@/lib/contracts";
-import { orchestrateMock } from "@/lib/mock-orchestrator";
+import { runRegisteredAgent } from "@/lib/orchestration/mock-compatibility";
 import { listTraces } from "@/lib/trace-store";
 
 export const runtime = "nodejs";
@@ -66,7 +66,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const response = await orchestrateMock(body as ChatRequest);
+  const response = await runRegisteredAgent(body as ChatRequest);
   const trace = listTraces(body.sessionId).find((record) => record.traceId === response.traceId);
   return NextResponse.json({ ...response, route: trace?.route });
 }
