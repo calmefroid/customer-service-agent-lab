@@ -22,7 +22,7 @@ import { ProgressCard } from "@/components/chat/ProgressCard";
 import { createRetryMessage } from "@/components/chat/retry-message";
 import {
   applyAgentEvent,
-  consumeAgentEventStream,
+  consumeAgentResponse,
   createStreamState,
   finishStream,
   type StreamState,
@@ -160,7 +160,7 @@ export default function Home() {
     setBusy(true);
 
     try {
-      const response = await fetch("/api/chat/stream", {
+      const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
         body: JSON.stringify({ ...payload, sessionId: requestSessionId }),
@@ -178,13 +178,13 @@ export default function Home() {
       }
       if (payload.attachment) updateImageStatus(options.userMessageId, "recognizing");
 
-      await consumeAgentEventStream(response, (event) => {
+      await consumeAgentResponse(response, (event) => {
         stream = applyAgentEvent(stream, event);
         setActiveStream(stream);
         if (event.type === "progress" && event.progress.stage === "image_observation") {
           updateImageStatus(options.userMessageId, event.progress.status === "failed" ? "failed" : event.progress.status === "started" ? "recognizing" : "ready");
         }
-      });
+      }, { requestId, sessionId: requestSessionId });
 
       if (!stream.terminal) {
         stream = finishStream(stream, { kind: "error", message: "连接意外中断，你的输入已保留", retryable: true });

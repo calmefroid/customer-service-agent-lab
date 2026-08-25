@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "@/lib/contracts";
 import {
   applyAgentEvent,
+  consumeAgentResponse,
   createStreamState,
   finishStream,
   parseAgentEventBlock,
@@ -144,5 +145,28 @@ describe("consumer AgentEvent stream state", () => {
     ].join("\n"));
     expect(parsed).toMatchObject({ type: "token", delta: "你好" });
     expect(parseAgentEventBlock("event: ping\ndata: {}")) .toBeUndefined();
+  });
+
+  it("accepts the current JSON chat endpoint through the AgentEvent consumer", async () => {
+    const received: AgentEvent[] = [];
+    const response = new Response(JSON.stringify({
+      message: "请先确认本人",
+      intent: "logistics_query",
+      riskLevel: "low",
+      traceId: "TR-json",
+      ui: { kind: "identity_confirm", maskedPhone: "尾号 6821", purpose: "order" },
+    }), { headers: { "content-type": "application/json" } });
+
+    await consumeAgentResponse(response, (agentEvent) => received.push(agentEvent), {
+      requestId: "request-json",
+      sessionId: "session-json",
+    });
+
+    expect(received).toHaveLength(1);
+    expect(received[0]).toMatchObject({
+      type: "final",
+      sessionId: "session-json",
+      response: { traceId: "TR-json", ui: { kind: "identity_confirm" } },
+    });
   });
 });

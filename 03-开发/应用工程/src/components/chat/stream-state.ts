@@ -1,4 +1,4 @@
-import type { AgentEvent, ChatUi } from "@/lib/contracts";
+import { PUBLIC_CONTRACT_VERSION, type AgentEvent, type ChatResponse, type ChatUi } from "@/lib/contracts";
 import { getPublicProgressTitle } from "@/lib/public-progress";
 
 import type { LocalMessage, LocalProgress } from "./types";
@@ -141,4 +141,27 @@ export async function consumeAgentEventStream(
 
   const finalEvent = parseAgentEventBlock(buffer);
   if (finalEvent) onEvent(finalEvent);
+}
+
+export async function consumeAgentResponse(
+  response: Response,
+  onEvent: (event: AgentEvent) => void,
+  context: { requestId: string; sessionId: string },
+): Promise<void> {
+  if (response.headers.get("content-type")?.includes("text/event-stream")) {
+    await consumeAgentEventStream(response, onEvent);
+    return;
+  }
+
+  const chatResponse = await response.json() as ChatResponse;
+  onEvent({
+    type: "final",
+    contractVersion: PUBLIC_CONTRACT_VERSION,
+    eventId: `${context.requestId}-final`,
+    sessionId: context.sessionId,
+    sequence: 1,
+    createdAt: new Date().toISOString(),
+    traceId: chatResponse.traceId,
+    response: chatResponse,
+  });
 }
