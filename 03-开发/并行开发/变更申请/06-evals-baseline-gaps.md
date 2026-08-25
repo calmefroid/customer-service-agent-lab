@@ -6,6 +6,26 @@
 
 **性质**：实现补齐，不申请修改 `contracts-v1` 公共判别值
 
+## 00 审批结论
+
+**审批日期**：2026-08-25
+
+**结论**：批准进入下一轮实现，公共契约继续冻结在 `PUBLIC_CONTRACT_VERSION=1.0.0`，不升级 `contracts-v1`。
+
+| 顺序 | 责任对话 | 交付边界 | 修复分支 |
+| --- | --- | --- | --- |
+| 1 | 03 Knowledge | 在自有 RAG / Knowledge Store 中导出可重复的 conflict / expired 场景和模块测试 | `codex/badcase-knowledge-states` |
+| 2 | 02 Business | 在自有 Mock Adapter 中提供默认关闭的 ToolResult 异常注入和模块测试 | `codex/badcase-business-errors` |
+| 3 | 01 Runtime | 在自有多模态观察与路由中区分铭牌、模糊图和破损图，并保护原有退换链路 | `codex/badcase-runtime-images` |
+
+执行约束：
+
+- 三个分支均从最新 `main` 创建，不互相合并，不修改共享编排文件或 06 Evals 目录。
+- owner 只导出能力和测试；`mock-orchestrator.ts`、最终 Evals 接线及跨模块回归仍由 00 负责。
+- 每个分支必须保持当前 86 项回归不退化，并新增本模块针对性测试。
+- 00 按 03 → 02 → 01 串行审查、合并；每次合并后运行全量测试与生产构建。
+- 最终验收为 86 项既有测试全部通过、36 项固定 Evals 全部通过，且破损图片退换、写操作确认和消费者 debug 隔离不得回归。
+
 ## 基线证据
 
 36 条固定案例通过 28 条，通过率 77.8%，稳定指纹为 `fp-d1ce2a6d`。失败集中在知识冲突 / 过期、工具异常注入和图片路由三类。完整证据见 `03-开发/应用工程/evals/baseline-report.md`。
