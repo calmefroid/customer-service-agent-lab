@@ -15,7 +15,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Composer } from "@/components/chat/Composer";
-import { FeedbackSheet, ResolutionPrompt } from "@/components/chat/Feedback";
+import { FeedbackSheet } from "@/components/chat/Feedback";
 import { BotAvatar, MessageItem } from "@/components/chat/MessageItem";
 import { ProgressCard } from "@/components/chat/ProgressCard";
 import { createRetryMessage } from "@/components/chat/retry-message";
@@ -86,11 +86,6 @@ export default function Home() {
     () => messages.length === 1 || messages.at(-1)?.ui?.kind === "service_menu",
     [messages],
   );
-  const latestAnswer = useMemo(
-    () => messages.findLast((message) => message.role === "assistant" && message.id !== "welcome" && !message.progress && !message.error),
-    [messages],
-  );
-
   useEffect(() => {
     chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, activeStream, pendingAttachment]);
@@ -318,12 +313,6 @@ export default function Home() {
     else setToast("感谢反馈，已记录“有帮助”");
   }
 
-  function resolve(id: string, resolved: boolean) {
-    setMessages((current) => current.map((message) => message.id === id ? { ...message, resolved } : message));
-    void saveFeedback(id, { resolved });
-    if (!resolved) setFeedbackTarget(id);
-  }
-
   async function copyMessage(text: string) {
     try {
       await navigator.clipboard.writeText(text);
@@ -371,7 +360,6 @@ export default function Home() {
         {activeStream?.progress && <ProgressCard progress={activeStream.progress} />}
         {activeStream?.draftText && <MessageItem message={{ id: `stream-${activeStream.requestId}`, role: "assistant", text: activeStream.draftText }} busy actions={uiActions} onRate={() => {}} onCopy={() => {}} onRetry={() => {}} />}
         {busy && !activeStream?.progress && !activeStream?.draftText && <div className="message-row"><BotAvatar /><div className="bubble typing" aria-label="正在回复"><span /><span /><span /></div></div>}
-        {!busy && latestAnswer && <ResolutionPrompt value={latestAnswer.resolved} onChange={(resolved) => resolve(latestAnswer.id, resolved)} />}
       </section>
 
       <Composer input={input} busy={busy} pending={pendingAttachment} fileRef={fileRef} onInput={setInput} onSelectFile={selectFile} onRemoveFile={removePendingFile} onSend={() => void sendMessage()} onStop={() => abortRef.current?.abort()} />

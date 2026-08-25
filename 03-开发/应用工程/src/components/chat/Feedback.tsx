@@ -1,16 +1,7 @@
 "use client";
 
-import { Check, MessageCircle, X } from "lucide-react";
+import { X } from "lucide-react";
 import { useState } from "react";
-
-export function ResolutionPrompt({ value, onChange }: { value?: boolean; onChange: (resolved: boolean) => void }) {
-  return (
-    <section className="resolution-prompt" aria-label="会话解决反馈">
-      <div><MessageCircle size={15} /><span>{value === undefined ? "这次解决了你的问题吗？" : <><Check size={13} />感谢反馈，你可以随时修改</>}</span></div>
-      <div><button className={value === true ? "selected" : ""} onClick={() => onChange(true)}>已解决</button><button className={value === false ? "selected" : ""} onClick={() => onChange(false)}>未解决</button></div>
-    </section>
-  );
-}
 
 const reasons = ["回答不准确", "没有解决问题", "步骤看不懂", "等待时间太长"];
 

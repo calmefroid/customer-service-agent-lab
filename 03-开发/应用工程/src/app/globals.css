@@ -198,12 +198,6 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .error-bubble button { display: flex; align-items: center; gap: 5px; margin-top: 9px; padding: 7px 9px; border: 0; border-radius: 9px; color: var(--danger); background: #fee9e6; font-size: 10px; font-weight: 700; }
 .stream-caret { display: inline-block; width: 2px; height: 1em; margin-left: 2px; vertical-align: -2px; background: var(--brand); animation: blink .8s infinite; }
 
-.resolution-prompt { margin: 9px 0 4px 35px; padding: 11px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,255,255,.82); }
-.resolution-prompt > div:first-child { display: flex; align-items: center; gap: 6px; color: #586568; font-size: 10px; font-weight: 650; }
-.resolution-prompt > div:first-child span { display: flex; align-items: center; gap: 4px; }
-.resolution-prompt > div:last-child { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 9px; }
-.resolution-prompt button { height: 32px; border: 1px solid var(--line); border-radius: 9px; color: #5d696b; background: #fff; font-size: 10px; }
-.resolution-prompt button.selected { color: var(--brand-dark); border-color: #acd2cb; background: var(--brand-soft); font-weight: 700; }
 .feedback-reasons { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 15px; }
 .feedback-reasons button { min-height: 38px; padding: 7px; border: 1px solid var(--line); border-radius: 10px; color: #566365; background: var(--surface); font-size: 10px; }
 .feedback-reasons button.selected { color: var(--brand-dark); border-color: #9fcac3; background: var(--brand-soft); }
@@ -247,7 +241,7 @@ button:disabled { cursor: default; }
 
 @media (max-width: 350px) {
   .chat { padding-right: 10px; padding-left: 10px; }
-  .quick-grid, .rich-card, .public-progress, .safety-card, .hint-card, .success-card, .resolution-prompt { margin-left: 31px; }
+  .quick-grid, .rich-card, .public-progress, .safety-card, .hint-card, .success-card { margin-left: 31px; }
   .confirmation-actions { grid-template-columns: 1fr 1fr; }
   .confirmation-actions .primary { grid-column: 1 / -1; }
 }
