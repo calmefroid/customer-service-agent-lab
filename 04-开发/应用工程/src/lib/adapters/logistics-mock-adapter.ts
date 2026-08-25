@@ -1,26 +1,35 @@
 import type { TraceSource } from "@/lib/contracts";
+import { tmsMockAdapter } from "@/lib/adapters/tms-mock-adapter";
 
 export async function createLogisticsUrge(): Promise<{
   requestNo: string;
   sources: TraceSource[];
 }> {
-  const requestNo = "URGE20260820009";
-  const updatedAt = new Date().toISOString();
+  const result = await tmsMockAdapter.createUrge(
+    {
+      orderId: "OD202608180236",
+      shipmentId: "SHIP-SF14900000628",
+      reason: "用户确认一键催办",
+    },
+    "legacy-orchestrator",
+    "legacy-logistics-urge",
+  );
+  if (result.status !== "success") throw new Error(result.error.message);
 
   return {
-    requestNo,
+    requestNo: result.data.urgeRequestNo,
     sources: [
       {
         type: "business",
         sourceSystem: "TMS",
-        recordId: requestNo,
-        updatedAt,
+        recordId: result.data.urgeRequestNo,
+        updatedAt: result.data.updatedAt,
       },
       {
         type: "business",
         sourceSystem: "CRM",
-        recordId: "CS20260820017",
-        updatedAt,
+        recordId: result.data.crmRecordId,
+        updatedAt: result.data.updatedAt,
       },
     ],
   };
