@@ -1,11 +1,12 @@
 import { getLatestOrder } from "@/lib/adapters/order-mock-adapter";
-import { createLogisticsUrge } from "@/lib/adapters/logistics-mock-adapter";
 import { findKnowledge, searchKnowledge } from "@/lib/adapters/knowledge-mock-adapter";
 import { queryProductKnowledge } from "@/lib/adapters/product-mock-adapter";
-import { createServiceTicket, getLatestServiceTicket } from "@/lib/adapters/service-mock-adapter";
+import { getLatestServiceTicket } from "@/lib/adapters/service-mock-adapter";
 import type {
   ChatRequest,
   ChatResponse,
+  ConfirmationRequest,
+  DataSourceMetadata,
   Intent,
   RiskLevel,
   RouteDecision,
@@ -13,11 +14,139 @@ import type {
   TraceStage,
   TraceSource,
 } from "@/lib/contracts";
+import type {
+  ConfirmedWrite,
+  LogisticsUrgeDraft,
+  ReturnExchangeDraft,
+  ServiceTicketDraft,
+  WorkflowContext,
+} from "@/lib/domain/business";
+import { businessWorkflowService } from "@/lib/domain/business-workflow";
+import { DEMO_CUSTOMER_ID } from "@/lib/mock-data/business-fixtures";
 import { appendTrace } from "@/lib/trace-store";
 
 const safetyPattern = /冒烟|烧焦|触电|火花|异常发热|明显过热|漏电|起火/;
 const requestedHumanPattern = /转人工|人工客服|找客服|真人客服|人工处理/;
 const disputePattern = /赔偿|判责|谁的责任|投诉|消协|必须赔|资格争议|拒绝处理/;
+
+function workflowContext(request: ChatRequest): WorkflowContext {
+  return {
+    sessionId: request.sessionId,
+    traceId: `pending:${request.sessionId}`,
+    identity: { customerId: DEMO_CUSTOMER_ID, verified: true },
+  };
+}
+
+function confirmedWrite<TDraft extends Record<string, unknown>>(
+  request: ChatRequest,
+  confirmation: ConfirmationRequest<TDraft>,
+  finalSnapshot: TDraft,
+): ConfirmedWrite<TDraft> {
+  const idempotencyKey = `compat:${request.sessionId}:${confirmation.operation}`;
+  const normalizedConfirmation = { ...confirmation, idempotencyKey };
+  return {
+    request: normalizedConfirmation,
+    confirmationToken: normalizedConfirmation.confirmationToken,
+    idempotencyKey,
+    finalSnapshot,
+  };
+}
+
+function traceSources(sources: DataSourceMetadata[]): TraceSource[] {
+  return sources.map((source) => ({
+    type: "business",
+    sourceSystem: source.sourceSystem,
+    recordId: source.recordId ?? source.requestId,
+    updatedAt: source.sourceUpdatedAt,
+  }));
+}
+
+function toolFailure(result: { error: { code: string; message: string } }): never {
+  throw new Error(`${result.error.code}: ${result.error.message}`);
+}
+
+async function submitIntegratedLogisticsUrge(request: ChatRequest) {
+  const context = workflowContext(request);
+  const draft: LogisticsUrgeDraft = {
+    orderId: "OD202608180236",
+    shipmentId: "SHIP-SF14900000628",
+    reason: "用户确认一键催办",
+  };
+  const prepared = await businessWorkflowService.prepareLogisticsUrge(context, draft);
+  if (prepared.status !== "success") return toolFailure(prepared);
+  const result = await businessWorkflowService.submitLogisticsUrge(
+    context,
+    confirmedWrite(request, prepared.data, draft),
+  );
+  if (result.status !== "success") return toolFailure(result);
+  return { requestNo: result.data.urgeRequestNo, sources: traceSources(result.meta.sources) };
+}
+
+async function submitIntegratedReturn(request: ChatRequest) {
+  const form = request.formData;
+  if (!form) throw new Error("INVALID_INPUT: 缺少退换申请字段");
+  const context = workflowContext(request);
+  const draft: ReturnExchangeDraft = {
+    orderId: "OD202608180236",
+    serviceType: form.serviceType === "退货" ? "return" : "exchange",
+    product: form.product,
+    reason: form.issueDescription,
+    itemCondition: "消费者描述到货破损，待人工审核",
+    evidence: ["消费者已提供图片或文字说明"],
+    contactPhone: form.contactPhone,
+    pickupAddress: form.pickupAddress,
+  };
+  const prepared = await businessWorkflowService.prepareReturnExchange(context, draft);
+  if (prepared.status !== "success") return toolFailure(prepared);
+  const result = await businessWorkflowService.submitReturnExchange(
+    context,
+    confirmedWrite(request, prepared.data, draft),
+  );
+  if (result.status !== "success") return toolFailure(result);
+  return { requestNo: result.data.requestNo, sources: traceSources(result.meta.sources) };
+}
+
+async function submitIntegratedServiceTicket(request: ChatRequest) {
+  const form = request.serviceFormData;
+  if (!form) throw new Error("INVALID_INPUT: 缺少售后工单字段");
+  const context = workflowContext(request);
+  const draft: ServiceTicketDraft = {
+    serviceType: form.serviceType === "安装服务" ? "installation" : "repair",
+    product: form.product,
+    purchaseChannel: form.purchaseChannel === "线上商城" ? "online" : "store",
+    issueDescription: form.faultDescription,
+    contactPhone: form.contactPhone,
+    serviceAddress: form.serviceAddress,
+    preferredContactTime: form.preferredContactTime,
+    riskLevel: "low",
+  };
+  const prepared = await businessWorkflowService.prepareServiceTicket(context, draft);
+  if (prepared.status !== "success") return toolFailure(prepared);
+  const result = await businessWorkflowService.submitServiceTicket(
+    context,
+    confirmedWrite(request, prepared.data, draft),
+  );
+  if (result.status !== "success") return toolFailure(result);
+  return { ticketNo: result.data.ticketNo, sources: traceSources(result.meta.sources) };
+}
+
+async function submitIntegratedHandoff(
+  request: ChatRequest,
+  reason: "safety" | "requested" | "dispute",
+  riskLevel: RiskLevel,
+  summary: string,
+) {
+  const result = await businessWorkflowService.escalateToHuman(workflowContext(request), {
+    reason,
+    riskLevel,
+    summary,
+    completedActions: reason === "safety" ? ["已发送断电与停止使用提示"] : ["已生成脱敏会话摘要"],
+    pendingQuestions: [],
+    relatedRecordIds: [],
+  });
+  if (result.status !== "success") return toolFailure(result);
+  return { handoffNo: result.data.handoffNo, sources: traceSources(result.meta.sources) };
+}
 
 const MOCK_ROUTER_SYSTEM_PROMPT = `你是灯具品牌售后客服 Agent 的意图路由器。
 你必须输出符合 JSON Schema 的结构化结果，不直接执行工具。
@@ -361,7 +490,7 @@ export async function orchestrateMock(request: ChatRequest): Promise<ChatRespons
     }
 
     if (request.action === "submit_logistics_urge") {
-      const urge = await createLogisticsUrge();
+      const urge = await submitIntegratedLogisticsUrge(request);
       const message = "物流催办已提交，并已同步人工客服跟进。物流平台的后续反馈会通过当前账号消息通知你。";
       return {
         message,
@@ -475,6 +604,12 @@ export async function orchestrateMock(request: ChatRequest): Promise<ChatRespons
 
   if (intent === "human_escalation" && !safetyPattern.test(request.message)) {
     const isDispute = disputePattern.test(request.message);
+    const handoff = await submitIntegratedHandoff(
+      request,
+      isDispute ? "dispute" : "requested",
+      isDispute ? "medium" : "low",
+      isDispute ? "用户提出赔偿、责任或投诉诉求，需人工确认" : "用户明确要求转接人工客服",
+    );
     const message = isDispute
       ? "这类赔偿、责任或投诉问题需要由人工客服确认。我已整理当前问题并转交专席，不会由机器人直接做结论。"
       : "好的，我已整理当前会话信息并转接人工客服，你不需要重新描述已经提供的内容。";
@@ -488,7 +623,10 @@ export async function orchestrateMock(request: ChatRequest): Promise<ChatRespons
         isDispute ? "medium" : "low",
         message,
         [isDispute ? "识别争议或投诉" : "识别主动转人工", "生成会话摘要", "转入人工客服队列"],
-        [{ type: "rule", sourceSystem: "Guardrail", recordId: isDispute ? "RULE-DISPUTE-002" : "RULE-HANDOFF-001", version: "V1.0" }],
+        [
+          { type: "rule", sourceSystem: "Guardrail", recordId: isDispute ? "RULE-DISPUTE-002" : "RULE-HANDOFF-001", version: "V1.0" },
+          ...handoff.sources,
+        ],
         [
           decisionStage("route", isDispute ? "识别争议升级意图" : "识别主动转人工意图", isDispute ? "用户表达赔偿、责任或投诉诉求，机器人不得做最终决定。" : "用户明确要求人工，停止继续自动业务引导。", 16),
           decisionStage("guardrail", "核对人工接管规则", "仅传递脱敏会话摘要、当前模块与已完成步骤，不包含模型私有思维链。", 9, "guardrail"),
@@ -499,7 +637,7 @@ export async function orchestrateMock(request: ChatRequest): Promise<ChatRespons
             method: "POST",
             endpoint: "/mock/crm/handoffs",
             input: { session_id: request.sessionId, queue: isDispute ? "DISPUTE_PRIORITY" : "GENERAL_AFTERSALE", reason_code: isDispute ? "DISPUTE" : "USER_REQUESTED", summary: "已脱敏的当前会话摘要" },
-            output: { success: true, status: "queued", queue: isDispute ? "售后争议专席" : "售后人工客服" },
+            output: { success: true, handoff_no: handoff.handoffNo, status: "queued", queue: isDispute ? "售后争议专席" : "售后人工客服" },
             statusCode: 201,
           }),
           decisionStage("output", "告知转接结果", "向用户说明已同步上下文，无需重复描述。", 8, "output"),
@@ -516,6 +654,12 @@ export async function orchestrateMock(request: ChatRequest): Promise<ChatRespons
 
   if (intent === "human_escalation") {
     const safetyKnowledge = await searchKnowledge("safety");
+    const handoff = await submitIntegratedHandoff(
+      request,
+      "safety",
+      "high",
+      "灯具疑似冒烟或烧焦异味，已提示立即断电并停止使用",
+    );
     const message =
       "请立即断开对应电源并停止使用，不要触碰或自行拆解灯具。我正在为你优先转接安全专席。";
     return {
@@ -528,7 +672,11 @@ export async function orchestrateMock(request: ChatRequest): Promise<ChatRespons
         "high",
         message,
         ["进入故障报修模块", "识别用电安全风险", "命中高风险规则", "读取已发布安全知识", "自动升级人工"],
-        [safetyKnowledge, { type: "rule", sourceSystem: "Guardrail", recordId: "RULE-SAFETY-001", version: "V1.0" }],
+        [
+          safetyKnowledge,
+          { type: "rule", sourceSystem: "Guardrail", recordId: "RULE-SAFETY-001", version: "V1.0" },
+          ...handoff.sources,
+        ],
         [
           decisionStage("route", "识别故障与安全信号", "在故障报修语境中检测到“冒烟 / 烧焦味 / 火花 / 触电 / 异常发热”等高风险信号，优先级覆盖普通排障。", 19),
           decisionStage("guardrail", "命中高风险安全规则", "RULE-SAFETY-001 要求立即断电、停止使用、禁止拆机，并跳过自助排障。", 8, "guardrail"),
@@ -549,7 +697,7 @@ export async function orchestrateMock(request: ChatRequest): Promise<ChatRespons
             method: "POST",
             endpoint: "/mock/crm/escalations",
             input: { session_id: request.sessionId, risk_level: "high", reason_code: "ELECTRICAL_SAFETY", summary: "灯具疑似冒烟或烧焦异味" },
-            output: { success: true, queue: "SAFETY_PRIORITY", priority: "urgent" },
+            output: { success: true, handoff_no: handoff.handoffNo, queue: "SAFETY_PRIORITY", priority: "urgent" },
             statusCode: 201,
           }),
           decisionStage("output", "生成安全回复", "先给出断电与禁止触碰指引，再告知已转安全专席。", 11, "output"),
@@ -561,6 +709,7 @@ export async function orchestrateMock(request: ChatRequest): Promise<ChatRespons
 
   if (intent === "return_exchange" && request.action === "submit_return") {
     const serviceType = request.formData?.serviceType ?? "退换货";
+    const returnRequest = await submitIntegratedReturn(request);
     const message = `${serviceType}申请已提交，后续进展会通过当前账号消息通知你。`;
     return {
       message,
@@ -572,7 +721,7 @@ export async function orchestrateMock(request: ChatRequest): Promise<ChatRespons
         "medium",
         message,
         ["校验用户确认", `读取用户最终编辑的${serviceType}申请`, "调用售后申请 Adapter", "返回申请编号"],
-        [{ type: "business", sourceSystem: "CRM", recordId: "RT20260820028", updatedAt: new Date().toISOString() }],
+        returnRequest.sources,
         [
           decisionStage("confirm", "校验用户确认与必填项", `用户已确认提交${serviceType}；商品、问题描述、联系电话和取件地址均已填写。`, 25, "guardrail"),
           decisionStage("policy", "核对可执行边界", "仅创建待审核申请，不自动判责、不承诺赔偿，也不直接生成退款。", 13, "guardrail"),
@@ -591,13 +740,13 @@ export async function orchestrateMock(request: ChatRequest): Promise<ChatRespons
               evidence_count: 1,
               user_confirmed: true,
             },
-            output: { success: true, request_no: "RT20260820028", status: "pending_review", next_step: "人工审核" },
+            output: { success: true, request_no: returnRequest.requestNo, status: "pending_review", next_step: "人工审核" },
             statusCode: 201,
           }),
-          decisionStage("output", "返回申请结果", `向用户返回申请编号 RT20260820028，并说明后续由售后人员审核。`, 16, "output"),
+          decisionStage("output", "返回申请结果", `向用户返回申请编号 ${returnRequest.requestNo}，并说明后续由售后人员审核。`, 16, "output"),
         ],
       ),
-      ui: { kind: "return_success", requestNo: "RT20260820028" },
+      ui: { kind: "return_success", requestNo: returnRequest.requestNo },
     };
   }
 
@@ -928,7 +1077,7 @@ export async function orchestrateMock(request: ChatRequest): Promise<ChatRespons
   }
 
   if (intent === "service_ticket_create" && request.action === "submit_service_ticket") {
-    const ticket = await createServiceTicket(request.serviceFormData!);
+    const ticket = await submitIntegratedServiceTicket(request);
     const isInstallation = request.serviceFormData?.serviceType === "安装服务";
     const serviceLabel = isInstallation ? "安装服务" : "售后报修";
     const message = `${serviceLabel}已提交，服务人员会按你填写的联系方式和时段进行预约。具体时间以人工确认结果为准。`;
@@ -942,7 +1091,7 @@ export async function orchestrateMock(request: ChatRequest): Promise<ChatRespons
         "medium",
         message,
         ["校验用户确认", `读取最终编辑的${serviceLabel}信息`, "调用 CRM 售后 Adapter", "返回工单编号"],
-        [ticket.source],
+        ticket.sources,
         [
           decisionStage("confirm", "校验用户确认与服务字段", `用户已确认提交${serviceLabel}；服务类型、商品、购买渠道、问题描述、联系方式、服务地址和联系时段完整。`, 26, "guardrail"),
           decisionStage("scope", "核对自动化边界", "仅创建待预约服务工单；不承诺上门时间，也不自动判定保修责任或收费。", 12, "guardrail"),
