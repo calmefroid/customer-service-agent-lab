@@ -129,7 +129,7 @@ feat/evals-badcase
 | `KnowledgeRetrievalResult` | `hit`、`no_hit`、`conflict`、`expired`；候选、采用项、过滤原因、冲突和引用 |
 | `TraceEvent` | `model`、`route`、`rag`、`tool`、`rule`、`confirmation`、`output`、`error` |
 
-任何功能对话需要改公共契约时，不直接修改共享文件，而是在 `04-开发/并行开发/变更申请/` 写一条变更申请，由 00 对话统一评估、修改和升级版本。
+任何功能对话需要改公共契约时，不直接修改共享文件，而是在 `03-开发/并行开发/变更申请/` 写一条变更申请，由 00 对话统一评估、修改和升级版本。
 
 ### 3. 明确数据是“演示持久化”还是“进程内临时”
 
@@ -347,7 +347,7 @@ flowchart LR
 本地 CI 等价门禁命令为：
 
 ```bash
-cd 04-开发/应用工程
+cd 03-开发/应用工程
 pnpm check
 ```
 
