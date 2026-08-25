@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  AlertTriangle,
   Archive,
   BookOpenCheck,
   Bot,
@@ -21,12 +22,15 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type {
-  KnowledgeArticle,
-  KnowledgeArticleFields,
-  KnowledgePreviewResult,
+  KnowledgeRetrievalStatus,
   KnowledgeStatus,
   KnowledgeTopic,
 } from "@/lib/contracts";
+import type {
+  KnowledgeManagedArticle,
+  KnowledgeManagedFields,
+  KnowledgePreviewResponse,
+} from "@/lib/rag/types";
 
 import styles from "./knowledge.module.css";
 
@@ -47,7 +51,14 @@ const statusLabels: Record<KnowledgeStatus, string> = {
   inactive: "已停用",
 };
 
-function articleFields(article: KnowledgeArticle): KnowledgeArticleFields {
+const retrievalLabels: Record<KnowledgeRetrievalStatus, string> = {
+  hit: "命中",
+  no_hit: "无有效知识",
+  conflict: "知识冲突",
+  expired: "时间窗无效",
+};
+
+function articleFields(article: KnowledgeManagedArticle): KnowledgeManagedFields {
   return {
     title: article.title,
     question: article.question,
@@ -57,10 +68,19 @@ function articleFields(article: KnowledgeArticle): KnowledgeArticleFields {
     productScope: article.productScope,
     channelScope: article.channelScope,
     regionScope: article.regionScope,
+    effectiveFrom: article.effectiveFrom,
+    ...(article.effectiveTo ? { effectiveTo: article.effectiveTo } : {}),
     source: article.source,
     maintainer: article.maintainer,
     tags: [...article.tags],
   };
+}
+
+function dateTimeInput(value?: string) {
+  if (!value) return "";
+  const date = new Date(value);
+  const offset = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
 }
 
 function formatTime(value?: string) {
@@ -75,14 +95,15 @@ function formatTime(value?: string) {
 }
 
 export default function KnowledgePage() {
-  const [articles, setArticles] = useState<KnowledgeArticle[]>([]);
+  const [articles, setArticles] = useState<KnowledgeManagedArticle[]>([]);
   const [selectedId, setSelectedId] = useState("");
-  const [draft, setDraft] = useState<KnowledgeArticleFields | null>(null);
+  const [draft, setDraft] = useState<KnowledgeManagedFields | null>(null);
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<KnowledgeStatus | "all">("all");
   const [topic, setTopic] = useState<KnowledgeTopic | "all">("all");
   const [previewQuery, setPreviewQuery] = useState("");
-  const [previewResults, setPreviewResults] = useState<KnowledgePreviewResult[]>([]);
+  const [preview, setPreview] = useState<KnowledgePreviewResponse | null>(null);
+  const [previewFilters, setPreviewFilters] = useState({ productCategory: "", channel: "", region: "", effectiveAt: "" });
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
   const [message, setMessage] = useState("");
@@ -93,7 +114,7 @@ export default function KnowledgePage() {
     try {
       const response = await fetch("/api/knowledge", { cache: "no-store" });
       if (!response.ok) throw new Error("加载失败");
-      const data = await response.json() as { articles: KnowledgeArticle[] };
+      const data = await response.json() as { articles: KnowledgeManagedArticle[] };
       setArticles(data.articles);
       setSelectedId((current) => preferredId ?? (current || data.articles[0]?.id || ""));
     } catch {
@@ -112,7 +133,7 @@ export default function KnowledgePage() {
     if (!nextSelected) return;
     setDraft(articleFields(nextSelected));
     setPreviewQuery(nextSelected.question);
-    setPreviewResults([]);
+    setPreview(null);
     setMessage("");
     setError("");
     // The editable form should reset only when the user selects another article.
@@ -135,13 +156,13 @@ export default function KnowledgePage() {
   const draftCount = articles.filter((article) => article.status === "draft" || article.hasUnpublishedChanges).length;
   const inactiveCount = articles.filter((article) => article.status === "inactive").length;
 
-  function update<K extends keyof KnowledgeArticleFields>(key: K, value: KnowledgeArticleFields[K]) {
+  function update<K extends keyof KnowledgeManagedFields>(key: K, value: KnowledgeManagedFields[K]) {
     setDraft((current) => current ? { ...current, [key]: value } : current);
     setMessage("");
     setError("");
   }
 
-  async function save(): Promise<KnowledgeArticle | undefined> {
+  async function save(): Promise<KnowledgeManagedArticle | undefined> {
     if (!selected || !draft) return undefined;
     setWorking(true);
     setError("");
@@ -151,7 +172,7 @@ export default function KnowledgePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id: selected.id, article: draft }),
       });
-      const data = await response.json() as { article?: KnowledgeArticle; error?: string };
+      const data = await response.json() as { article?: KnowledgeManagedArticle; error?: string };
       if (!response.ok || !data.article) throw new Error(data.error ?? "保存失败");
       setArticles((current) => current.map((article) => article.id === data.article?.id ? data.article : article));
       setMessage(data.article.status === "published" ? "工作副本已保存，发布前不会影响消费者回答。" : "草稿已保存。");
@@ -173,7 +194,7 @@ export default function KnowledgePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "create" }),
       });
-      const data = await response.json() as { article: KnowledgeArticle };
+      const data = await response.json() as { article: KnowledgeManagedArticle };
       if (!response.ok) throw new Error("新建失败");
       await load(data.article.id);
       setMessage("已创建知识草稿，请补充内容后预览并发布。");
@@ -196,11 +217,11 @@ export default function KnowledgePage() {
       const response = await fetch("/api/knowledge", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "preview", query: previewQuery, articleId: selected.id }),
+        body: JSON.stringify({ action: "preview", query: previewQuery, articleId: selected.id, ...previewFilters }),
       });
-      const data = await response.json() as { results?: KnowledgePreviewResult[]; error?: string };
+      const data = await response.json() as KnowledgePreviewResponse & { error?: string };
       if (!response.ok) throw new Error(data.error ?? "预览失败");
-      setPreviewResults(data.results ?? []);
+      setPreview(data);
       setMessage("已使用当前工作副本完成召回预览；消费者线上问答仍只读取已发布版本。");
     } catch (previewError) {
       setError(previewError instanceof Error ? previewError.message : "预览失败");
@@ -220,7 +241,7 @@ export default function KnowledgePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "publish", id: selected.id }),
       });
-      const data = await response.json() as { article?: KnowledgeArticle; error?: string };
+      const data = await response.json() as { article?: KnowledgeManagedArticle; error?: string };
       if (!response.ok || !data.article) throw new Error(data.error ?? "发布失败");
       await load(data.article.id);
       setMessage(`知识 ${data.article.version} 已发布，后续消费者问题将使用此版本。`);
@@ -241,7 +262,7 @@ export default function KnowledgePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "deactivate", id: selected.id }),
       });
-      const data = await response.json() as { article?: KnowledgeArticle; error?: string };
+      const data = await response.json() as { article?: KnowledgeManagedArticle; error?: string };
       if (!response.ok || !data.article) throw new Error(data.error ?? "停用失败");
       await load(data.article.id);
       setMessage("知识已停用，RAG 不会再使用该条目。");
@@ -321,13 +342,26 @@ export default function KnowledgePage() {
                   <label><span>适用渠道</span><input value={draft.channelScope} onChange={(event) => update("channelScope", event.target.value)} /></label>
                   <label><span>适用地区</span><input value={draft.regionScope} onChange={(event) => update("regionScope", event.target.value)} /></label>
                   <label><span>知识来源 *</span><input value={draft.source} onChange={(event) => update("source", event.target.value)} /></label>
+                  <label><span>生效时间 *</span><input type="datetime-local" value={dateTimeInput(draft.effectiveFrom)} onChange={(event) => update("effectiveFrom", event.target.value ? new Date(event.target.value).toISOString() : "")} /></label>
+                  <label><span>失效时间（可选）</span><input type="datetime-local" value={dateTimeInput(draft.effectiveTo)} min={dateTimeInput(draft.effectiveFrom)} onChange={(event) => update("effectiveTo", event.target.value ? new Date(event.target.value).toISOString() : "")} /></label>
                   <label className={styles.full}><span>检索标签（逗号分隔）</span><input value={draft.tags.join("，")} onChange={(event) => update("tags", event.target.value.split(/[，,]/).map((item) => item.trim()).filter(Boolean))} /></label>
                 </div>
 
                 <section className={styles.previewSection}>
                   <div className={styles.sectionTitle}><div><Eye size={16} /><span>召回预览</span></div><small>预览可使用当前工作副本；线上消费者仍只使用 published 快照</small></div>
                   <div className={styles.previewBar}><input value={previewQuery} onChange={(event) => setPreviewQuery(event.target.value)} placeholder="输入一条消费者问题测试召回" /><button disabled={working} onClick={() => void runPreview()}>{working ? <LoaderCircle className={styles.spin} size={14} /> : <Sparkles size={14} />}测试召回</button></div>
-                  {previewResults.length > 0 ? <div className={styles.previewResults}>{previewResults.map((result, index) => <article key={result.articleId} className={result.selectedDraft ? styles.previewSelected : ""}><span>#{index + 1}</span><div><strong>{result.title}</strong><p>{result.excerpt}</p><small>{topicLabels[result.topic]} · {statusLabels[result.status]} · {result.version}{result.selectedDraft ? " · 当前工作副本" : ""}</small></div><em>{Math.round(result.score * 100)}%</em></article>)}</div> : <div className={styles.previewEmpty}><Eye size={20} /><span>输入消费者问法，检查候选知识、版本与模拟召回分数。</span></div>}
+                  <div className={styles.previewFilters}>
+                    <label><span>产品 / 品类</span><input value={previewFilters.productCategory} onChange={(event) => setPreviewFilters((current) => ({ ...current, productCategory: event.target.value }))} placeholder="如：智能灯具" /></label>
+                    <label><span>渠道</span><input value={previewFilters.channel} onChange={(event) => setPreviewFilters((current) => ({ ...current, channel: event.target.value }))} placeholder="如：线上商城" /></label>
+                    <label><span>地区</span><input value={previewFilters.region} onChange={(event) => setPreviewFilters((current) => ({ ...current, region: event.target.value }))} placeholder="如：中国大陆" /></label>
+                    <label><span>检索时间</span><input type="datetime-local" value={dateTimeInput(previewFilters.effectiveAt)} onChange={(event) => setPreviewFilters((current) => ({ ...current, effectiveAt: event.target.value ? new Date(event.target.value).toISOString() : "" }))} /></label>
+                  </div>
+                  {preview && <div className={`${styles.retrievalSummary} ${styles[preview.retrieval.status]}`}>
+                    <div><strong>{retrievalLabels[preview.retrieval.status]}</strong><span>{preview.retrieval.selectedArticleIds.length ? `采用 ${preview.retrieval.selectedArticleIds.join("、")}` : "不自动采用知识"}</span></div>
+                    <code>{preview.retrieval.requestId}</code>
+                    {preview.retrieval.conflicts.map((conflict) => <p key={conflict.articleIds.join("-")}><AlertTriangle size={13} />{conflict.reason}</p>)}
+                  </div>}
+                  {preview?.candidates.length ? <div className={styles.previewResults}>{preview.candidates.map((result, index) => <article key={result.articleId} className={`${result.selectedDraft ? styles.previewSelected : ""} ${result.adopted ? styles.previewAdopted : ""}`}><span>#{index + 1}</span><div><strong>{result.title}</strong><p>{result.excerpt}</p><small>{topicLabels[result.topic]} · {statusLabels[result.status]} · {result.version}{result.selectedDraft ? " · 当前工作副本" : ""}</small><div className={styles.scoreBreakdown}>标题 {Math.round(result.fieldScores.title * 100)} · 问法 {Math.round(result.fieldScores.question * 100)} · 回答 {Math.round(result.fieldScores.answer * 100)} · 标签 {Math.round(result.fieldScores.tags * 100)} · 范围 {Math.round(result.fieldScores.scope * 100)}</div>{result.adoptionReason && <div className={styles.adoptionReason}>采用：{result.adoptionReason}</div>}{result.filterReasons.map((reason) => <div className={styles.filterReason} key={reason}>过滤：{reason}</div>)}</div><em>{Math.round(result.score * 100)}%</em></article>)}</div> : <div className={styles.previewEmpty}><Eye size={20} /><span>{preview ? "没有达到阈值的候选知识；不会生成业务结论。" : "输入消费者问法，检查候选知识、版本、过滤原因与确定性分数。"}</span></div>}
                 </section>
 
                 <div className={styles.dangerZone}><div><Archive size={15} /><span><strong>停用知识</strong><small>停用后消费者 RAG 立即停止使用，Trace 中历史版本仍保留。</small></span></div><button disabled={working || selected.status === "inactive"} onClick={() => void deactivate()}>{selected.status === "inactive" ? "已停用" : "停用此知识"}</button></div>
