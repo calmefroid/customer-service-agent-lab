@@ -15,8 +15,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Composer } from "@/components/chat/Composer";
-import { FeedbackSheet, ResolutionPrompt } from "@/components/chat/Feedback";
-import { FEEDBACK_IDLE_DELAY_MS, isFeedbackCheckpoint } from "@/components/chat/feedback-checkpoint";
+import { FeedbackSheet } from "@/components/chat/Feedback";
 import { BotAvatar, MessageItem } from "@/components/chat/MessageItem";
 import { ProgressCard } from "@/components/chat/ProgressCard";
 import { createRetryMessage } from "@/components/chat/retry-message";
@@ -73,8 +72,6 @@ export default function Home() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [humanSheet, setHumanSheet] = useState(false);
   const [feedbackTarget, setFeedbackTarget] = useState<string | null>(null);
-  const [feedbackCheckpointId, setFeedbackCheckpointId] = useState<string | null>(null);
-  const [showResolutionPrompt, setShowResolutionPrompt] = useState(false);
   const [logisticsContact, setLogisticsContact] = useState<OrderView | null>(null);
   const [pendingAttachment, setPendingAttachment] = useState<PendingAttachment | null>(null);
   const [toast, setToast] = useState("");
@@ -89,11 +86,6 @@ export default function Home() {
     () => messages.length === 1 || messages.at(-1)?.ui?.kind === "service_menu",
     [messages],
   );
-  const feedbackAnswer = useMemo(
-    () => feedbackCheckpointId ? messages.find((message) => message.id === feedbackCheckpointId) : undefined,
-    [feedbackCheckpointId, messages],
-  );
-
   useEffect(() => {
     chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, activeStream, pendingAttachment]);
@@ -103,42 +95,6 @@ export default function Home() {
     const timer = window.setTimeout(() => setToast(""), 2200);
     return () => window.clearTimeout(timer);
   }, [toast]);
-
-  useEffect(() => {
-    if (!feedbackCheckpointId || busy) {
-      setShowResolutionPrompt(false);
-      return;
-    }
-
-    let timer: number | undefined;
-    const armIdleTimer = () => {
-      if (timer !== undefined) window.clearTimeout(timer);
-      setShowResolutionPrompt(false);
-      timer = window.setTimeout(() => setShowResolutionPrompt(true), FEEDBACK_IDLE_DELAY_MS);
-    };
-    const handleActivity = (event: Event) => {
-      if (event.target instanceof Element && event.target.closest("[data-feedback-prompt]")) return;
-      armIdleTimer();
-    };
-
-    armIdleTimer();
-    window.addEventListener("pointerdown", handleActivity, true);
-    window.addEventListener("keydown", handleActivity, true);
-    const chat = chatRef.current;
-    chat?.addEventListener("scroll", handleActivity, { passive: true });
-
-    return () => {
-      if (timer !== undefined) window.clearTimeout(timer);
-      window.removeEventListener("pointerdown", handleActivity, true);
-      window.removeEventListener("keydown", handleActivity, true);
-      chat?.removeEventListener("scroll", handleActivity);
-    };
-  }, [busy, feedbackCheckpointId]);
-
-  function clearFeedbackCheckpoint() {
-    setFeedbackCheckpointId(null);
-    setShowResolutionPrompt(false);
-  }
 
   function updateImageStatus(messageId: string | undefined, status: NonNullable<LocalMessage["image"]>["status"]) {
     if (!messageId) return;
@@ -230,13 +186,6 @@ export default function Home() {
           retryRequest: payload,
         }];
       });
-      if (sessionRef.current === requestSessionId) {
-        const checkpoint = terminal?.kind === "completed" && stream.message && isFeedbackCheckpoint(stream.message)
-          ? stream.message.id
-          : null;
-        setFeedbackCheckpointId(checkpoint);
-        setShowResolutionPrompt(false);
-      }
       abortRef.current = null;
       setActiveStream(null);
       setBusy(false);
@@ -250,7 +199,6 @@ export default function Home() {
     options?: { replaceUiKind?: ChatUi["kind"] },
   ) {
     if (busy || abortRef.current) return;
-    clearFeedbackCheckpoint();
     const userMessage: LocalMessage = {
       id: createId("user"),
       role: "user",
@@ -327,7 +275,6 @@ export default function Home() {
     if (!message.retryRequest || busy) return;
     const retryMessage = createRetryMessage(message, createId("user"));
     if (!retryMessage) return;
-    clearFeedbackCheckpoint();
     setMessages((current) => [...current, retryMessage]);
     await callChat(retryMessage.retryRequest!, { userMessageId: retryMessage.id });
   }
@@ -343,7 +290,6 @@ export default function Home() {
     setActiveModule(undefined);
     setPendingAttachment(null);
     setMenuOpen(false);
-    clearFeedbackCheckpoint();
     setToast("已开始新会话");
   }
 
@@ -367,13 +313,6 @@ export default function Home() {
     else setToast("感谢反馈，已记录“有帮助”");
   }
 
-  function resolve(id: string, resolved: boolean) {
-    setMessages((current) => current.map((message) => message.id === id ? { ...message, resolved } : message));
-    void saveFeedback(id, { resolved });
-    clearFeedbackCheckpoint();
-    if (!resolved) setFeedbackTarget(id);
-  }
-
   async function copyMessage(text: string) {
     try {
       await navigator.clipboard.writeText(text);
@@ -384,7 +323,6 @@ export default function Home() {
   }
 
   function cancelConfirmation() {
-    clearFeedbackCheckpoint();
     setMessages((current) => [...closeLatestConfirmation(current),
       { id: createId("user"), role: "user", text: "取消本次操作" },
       { id: createId("cancelled"), role: "assistant", text: "已取消，未提交任何业务操作。你可以继续补充信息或问其他问题。" },
@@ -411,7 +349,7 @@ export default function Home() {
       <header className="app-header">
         <div className="brand-avatar"><Sparkles size={20} /></div>
         <div className="header-copy"><div className="header-title">智享家售后助手</div><div className="header-status"><span className="status-dot" />全天在线</div></div>
-        <button className="icon-button" aria-label="转人工" onClick={() => { clearFeedbackCheckpoint(); setHumanSheet(true); }}><Headphones size={19} /></button>
+        <button className="icon-button" aria-label="转人工" onClick={() => setHumanSheet(true)}><Headphones size={19} /></button>
         <button className="icon-button" aria-label="更多" onClick={() => setMenuOpen((open) => !open)}><Ellipsis size={20} /></button>
       </header>
 
@@ -422,7 +360,6 @@ export default function Home() {
         {activeStream?.progress && <ProgressCard progress={activeStream.progress} />}
         {activeStream?.draftText && <MessageItem message={{ id: `stream-${activeStream.requestId}`, role: "assistant", text: activeStream.draftText }} busy actions={uiActions} onRate={() => {}} onCopy={() => {}} onRetry={() => {}} />}
         {busy && !activeStream?.progress && !activeStream?.draftText && <div className="message-row"><BotAvatar /><div className="bubble typing" aria-label="正在回复"><span /><span /><span /></div></div>}
-        {!busy && showResolutionPrompt && feedbackAnswer && <ResolutionPrompt value={feedbackAnswer.resolved} onChange={(resolved) => resolve(feedbackAnswer.id, resolved)} />}
       </section>
 
       <Composer input={input} busy={busy} pending={pendingAttachment} fileRef={fileRef} onInput={setInput} onSelectFile={selectFile} onRemoveFile={removePendingFile} onSend={() => void sendMessage()} onStop={() => abortRef.current?.abort()} />
