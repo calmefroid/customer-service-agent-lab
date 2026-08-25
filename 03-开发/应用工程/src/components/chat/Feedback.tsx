@@ -5,7 +5,7 @@ import { useState } from "react";
 
 export function ResolutionPrompt({ value, onChange }: { value?: boolean; onChange: (resolved: boolean) => void }) {
   return (
-    <section className="resolution-prompt" aria-label="会话解决反馈">
+    <section className="resolution-prompt" aria-label="会话解决反馈" data-feedback-prompt>
       <div><MessageCircle size={15} /><span>{value === undefined ? "这次解决了你的问题吗？" : <><Check size={13} />感谢反馈，你可以随时修改</>}</span></div>
       <div><button className={value === true ? "selected" : ""} onClick={() => onChange(true)}>已解决</button><button className={value === false ? "selected" : ""} onClick={() => onChange(false)}>未解决</button></div>
     </section>
