@@ -1,34 +1,26 @@
 import type { ChatRequest } from "@/lib/contracts";
 
-export interface PublicProgressPlan {
-  title: string;
-  steps: string[];
+const progressTitles: Record<string, string> = {
+  image_observation: "正在查看你的图片",
+  routing: "正在理解你的问题",
+  workflow: "正在处理你的请求",
+};
+
+export function getPublicProgressTitle(stage: string, currentTitle?: string): string {
+  if (stage === "image_observation") return progressTitles.image_observation;
+  if (currentTitle && currentTitle !== progressTitles.routing) return currentTitle;
+  return progressTitles[stage] ?? currentTitle ?? "正在处理你的请求";
 }
 
-export function getPublicProgressPlan(
-  request: Omit<ChatRequest, "sessionId">,
-): PublicProgressPlan | undefined {
-  if (request.attachment) {
-    return {
-      title: "正在整理退换申请",
-      steps: ["识别图片中的商品问题", "核对适用的售后规则", "生成可编辑的申请草稿"],
-    };
-  }
-
-  if (/预约.*安装|上门安装|安装师傅/.test(request.message)) {
-    return {
-      title: "正在整理安装服务信息",
-      steps: ["识别服务类型", "核对预约所需字段", "生成可编辑服务单"],
-    };
-  }
-
-  if (/型号|参数|单电机|双电机|WIFI|WiFi|wifi|功能|认证|质保|保修|安装视频|门店|验真/.test(request.message)) {
-    return {
-      title: "正在查询相关信息",
-      steps: ["识别问题主题", "查询产品或知识库", "整理适用说明"],
-    };
-  }
-
+/**
+ * Kept for the non-streaming compatibility route. The consumer page no longer
+ * advances these plans with timers; AgentEvent.progress is authoritative.
+ */
+export function getPublicProgressPlan(request: Omit<ChatRequest, "sessionId">) {
+  if (request.attachment) return {
+    title: "正在整理退换申请",
+    steps: ["识别图片中的商品问题", "核对适用的售后规则", "生成可编辑的申请草稿"],
+  };
   switch (request.action) {
     case "confirm_identity":
       return { title: "正在查询订单物流", steps: ["验证查询权限", "读取最近订单", "获取最新物流轨迹"] };
