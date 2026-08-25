@@ -6,6 +6,7 @@
 **/out/
 **/coverage/
 **/*.log
+**/*.tsbuildinfo
 
 # Local secrets; keep documented examples
 **/.env

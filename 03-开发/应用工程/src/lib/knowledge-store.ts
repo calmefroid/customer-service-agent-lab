@@ -1,20 +1,37 @@
+import type { KnowledgeTopic } from "@/lib/contracts";
+import { retrieveFromKnowledgeIndex } from "@/lib/rag/deterministic-retriever";
 import type {
-  KnowledgeArticle,
-  KnowledgeArticleFields,
-  KnowledgePreviewResult,
-  KnowledgeTopic,
-} from "@/lib/contracts";
+  KnowledgeIndexArticle,
+  KnowledgeManagedArticle,
+  KnowledgeManagedFields,
+  KnowledgePreviewResponse,
+  KnowledgeSearchFilters,
+} from "@/lib/rag/types";
 
-type StoredKnowledgeArticle = Omit<KnowledgeArticle, "hasUnpublishedChanges"> & {
-  publishedSnapshot?: KnowledgeArticleFields;
-};
+interface PublishedSnapshot extends KnowledgeManagedFields {
+  version: string;
+  publishedAt: string;
+}
+
+interface StoredKnowledgeArticle extends KnowledgeManagedFields {
+  id: string;
+  status: "draft" | "published" | "inactive";
+  version: string;
+  updatedAt: string;
+  publishedAt?: string;
+  publishedSnapshot?: PublishedSnapshot;
+}
 
 declare global {
   // eslint-disable-next-line no-var
   var customerServiceKnowledgeStore: StoredKnowledgeArticle[] | undefined;
+  // eslint-disable-next-line no-var
+  var customerServiceKnowledgeDraftSequence: number | undefined;
 }
 
-const seedFields: Array<KnowledgeArticleFields & { id: string; version: string; updatedAt: string }> = [
+const DEFAULT_EFFECTIVE_FROM = "2026-01-01T00:00:00+08:00";
+
+const seedFields: Array<KnowledgeManagedFields & { id: string; version: string; updatedAt: string }> = [
   {
     id: "KB-PRODUCT-LIVINGROOM-012",
     version: "V3.2",
@@ -27,6 +44,7 @@ const seedFields: Array<KnowledgeArticleFields & { id: string; version: string; 
     productScope: "吸顶灯、浴霸、智能灯具",
     channelScope: "全部消费者渠道",
     regionScope: "中国大陆",
+    effectiveFrom: DEFAULT_EFFECTIVE_FROM,
     source: "PCMP 产品说明与客服审核口径",
     maintainer: "产品知识运营",
     tags: ["型号", "参数", "选型", "产品功能"],
@@ -43,6 +61,7 @@ const seedFields: Array<KnowledgeArticleFields & { id: string; version: string; 
     productScope: "全部灯具商品",
     channelScope: "线上商城、线下门店",
     regionScope: "中国大陆",
+    effectiveFrom: DEFAULT_EFFECTIVE_FROM,
     source: "售后退换货处理规范",
     maintainer: "售后政策运营",
     tags: ["破损", "换货", "退货", "签收"],
@@ -59,6 +78,7 @@ const seedFields: Array<KnowledgeArticleFields & { id: string; version: string; 
     productScope: "全部用电产品",
     channelScope: "全部消费者渠道",
     regionScope: "中国大陆",
+    effectiveFrom: DEFAULT_EFFECTIVE_FROM,
     source: "用电安全红线规则",
     maintainer: "质量与安全团队",
     tags: ["冒烟", "烧焦", "火花", "漏电", "异常发热"],
@@ -75,6 +95,7 @@ const seedFields: Array<KnowledgeArticleFields & { id: string; version: string; 
     productScope: "吸顶灯、智能灯具",
     channelScope: "全部消费者渠道",
     regionScope: "中国大陆",
+    effectiveFrom: DEFAULT_EFFECTIVE_FROM,
     source: "售后故障排查手册",
     maintainer: "售后技术支持",
     tags: ["闪烁", "不亮", "遥控", "异响", "报修"],
@@ -91,6 +112,7 @@ const seedFields: Array<KnowledgeArticleFields & { id: string; version: string; 
     productScope: "支持联网的智能灯具",
     channelScope: "全部消费者渠道",
     regionScope: "中国大陆",
+    effectiveFrom: DEFAULT_EFFECTIVE_FROM,
     source: "智享家 App 配网手册",
     maintainer: "智能产品支持",
     tags: ["配网", "WIFI", "绑定", "搜不到设备"],
@@ -107,6 +129,7 @@ const seedFields: Array<KnowledgeArticleFields & { id: string; version: string; 
     productScope: "全部灯具商品",
     channelScope: "线上商城、线下门店",
     regionScope: "中国大陆",
+    effectiveFrom: DEFAULT_EFFECTIVE_FROM,
     source: "售后质保政策",
     maintainer: "售后政策运营",
     tags: ["质保", "保修", "收费", "过保"],
@@ -123,6 +146,7 @@ const seedFields: Array<KnowledgeArticleFields & { id: string; version: string; 
     productScope: "全部需要安装的灯具",
     channelScope: "全部消费者渠道",
     regionScope: "中国大陆",
+    effectiveFrom: DEFAULT_EFFECTIVE_FROM,
     source: "产品安装安全规范",
     maintainer: "安装服务运营",
     tags: ["安装", "拆卸", "接线", "安装视频"],
@@ -139,14 +163,29 @@ const seedFields: Array<KnowledgeArticleFields & { id: string; version: string; 
     productScope: "全部产品",
     channelScope: "全部消费者渠道",
     regionScope: "中国大陆",
+    effectiveFrom: DEFAULT_EFFECTIVE_FROM,
     source: "消费者渠道指引",
     maintainer: "客服运营",
     tags: ["门店", "验真", "客服电话", "购买渠道"],
   },
 ];
 
-function cloneFields(article: KnowledgeArticleFields): KnowledgeArticleFields {
-  return { ...article, answerItems: [...article.answerItems], tags: [...article.tags] };
+function cloneFields(article: KnowledgeManagedFields): KnowledgeManagedFields {
+  return {
+    title: article.title,
+    question: article.question,
+    answer: article.answer,
+    answerItems: [...article.answerItems],
+    topic: article.topic,
+    productScope: article.productScope,
+    channelScope: article.channelScope,
+    regionScope: article.regionScope,
+    effectiveFrom: article.effectiveFrom,
+    tags: [...article.tags],
+    source: article.source,
+    maintainer: article.maintainer,
+    ...(article.effectiveTo ? { effectiveTo: article.effectiveTo } : {}),
+  };
 }
 
 function createSeedStore(): StoredKnowledgeArticle[] {
@@ -157,41 +196,38 @@ function createSeedStore(): StoredKnowledgeArticle[] {
     publishedAt: updatedAt,
     status: "published",
     ...cloneFields(fields),
-    publishedSnapshot: cloneFields(fields),
+    publishedSnapshot: { ...cloneFields(fields), version, publishedAt: updatedAt },
   }));
 }
 
 function store(): StoredKnowledgeArticle[] {
-  if (!globalThis.customerServiceKnowledgeStore) {
-    globalThis.customerServiceKnowledgeStore = createSeedStore();
-  }
+  if (!globalThis.customerServiceKnowledgeStore) globalThis.customerServiceKnowledgeStore = createSeedStore();
   return globalThis.customerServiceKnowledgeStore;
 }
 
-function fieldsOf(article: StoredKnowledgeArticle): KnowledgeArticleFields {
-  return {
-    title: article.title,
-    question: article.question,
-    answer: article.answer,
-    answerItems: [...article.answerItems],
-    topic: article.topic,
-    productScope: article.productScope,
-    channelScope: article.channelScope,
-    regionScope: article.regionScope,
-    source: article.source,
-    maintainer: article.maintainer,
-    tags: [...article.tags],
-  };
+function fieldsOf(article: KnowledgeManagedFields): KnowledgeManagedFields {
+  return cloneFields(article);
 }
 
 function hasChanges(article: StoredKnowledgeArticle): boolean {
   if (!article.publishedSnapshot) return true;
-  return JSON.stringify(fieldsOf(article)) !== JSON.stringify(article.publishedSnapshot);
+  const { version: _version, publishedAt: _publishedAt, ...snapshotFields } = article.publishedSnapshot;
+  return JSON.stringify(fieldsOf(article)) !== JSON.stringify(snapshotFields);
 }
 
-function toPublic(article: StoredKnowledgeArticle): KnowledgeArticle {
+function toManagedArticle(article: StoredKnowledgeArticle): KnowledgeManagedArticle {
   const { publishedSnapshot: _publishedSnapshot, ...rest } = article;
   return { ...rest, answerItems: [...article.answerItems], tags: [...article.tags], hasUnpublishedChanges: hasChanges(article) };
+}
+
+function toWorkingIndex(article: StoredKnowledgeArticle): KnowledgeIndexArticle {
+  return { ...fieldsOf(article), id: article.id, version: article.version, status: article.status, updatedAt: article.updatedAt, publishedAt: article.publishedAt };
+}
+
+function toPublishedIndex(article: StoredKnowledgeArticle): KnowledgeIndexArticle | undefined {
+  if (!article.publishedSnapshot) return undefined;
+  const { version, publishedAt, ...fields } = article.publishedSnapshot;
+  return { ...cloneFields(fields), id: article.id, version, status: article.status, updatedAt: publishedAt, publishedAt };
 }
 
 function nextVersion(version: string): string {
@@ -200,109 +236,120 @@ function nextVersion(version: string): string {
   return `V${match[1]}.${Number(match[2]) + 1}`;
 }
 
-export function listKnowledgeArticles(): KnowledgeArticle[] {
-  return store()
-    .map(toPublic)
-    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+export function listKnowledgeArticles(): KnowledgeManagedArticle[] {
+  return store().map(toManagedArticle).sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime());
 }
 
-export function getKnowledgeArticle(id: string): KnowledgeArticle | undefined {
+export function getKnowledgeArticle(id: string): KnowledgeManagedArticle | undefined {
   const article = store().find((item) => item.id === id);
-  return article ? toPublic(article) : undefined;
+  return article ? toManagedArticle(article) : undefined;
 }
 
-export function createKnowledgeArticle(input?: Partial<KnowledgeArticleFields>): KnowledgeArticle {
+export function createKnowledgeArticle(input?: Partial<KnowledgeManagedFields>): KnowledgeManagedArticle {
   const now = new Date().toISOString();
+  const sequence = (globalThis.customerServiceKnowledgeDraftSequence ?? 0) + 1;
+  globalThis.customerServiceKnowledgeDraftSequence = sequence;
   const article: StoredKnowledgeArticle = {
-    id: `KB-DRAFT-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
+    id: `KB-DRAFT-${String(sequence).padStart(3, "0")}`,
     status: "draft",
     version: "V0.1",
     updatedAt: now,
     title: input?.title ?? "未命名知识",
     question: input?.question ?? "",
     answer: input?.answer ?? "",
-    answerItems: input?.answerItems ?? [],
+    answerItems: [...(input?.answerItems ?? [])],
     topic: input?.topic ?? "troubleshooting",
     productScope: input?.productScope ?? "全部灯具商品",
     channelScope: input?.channelScope ?? "全部消费者渠道",
     regionScope: input?.regionScope ?? "中国大陆",
+    effectiveFrom: input?.effectiveFrom ?? now,
+    ...(input?.effectiveTo ? { effectiveTo: input.effectiveTo } : {}),
     source: input?.source ?? "客服人工维护",
     maintainer: input?.maintainer ?? "客服运营",
-    tags: input?.tags ?? [],
+    tags: [...(input?.tags ?? [])],
   };
   store().push(article);
-  return toPublic(article);
+  return toManagedArticle(article);
 }
 
-export function updateKnowledgeArticle(id: string, input: Partial<KnowledgeArticleFields>): KnowledgeArticle | undefined {
+export function updateKnowledgeArticle(id: string, input: Partial<KnowledgeManagedFields>): KnowledgeManagedArticle | undefined {
   const article = store().find((item) => item.id === id);
   if (!article) return undefined;
   Object.assign(article, input);
   if (input.answerItems) article.answerItems = [...input.answerItems];
   if (input.tags) article.tags = [...input.tags];
+  if (input.effectiveTo === "") delete article.effectiveTo;
   article.updatedAt = new Date().toISOString();
-  return toPublic(article);
+  return toManagedArticle(article);
 }
 
-export function publishKnowledgeArticle(id: string): KnowledgeArticle | undefined {
+export function publishKnowledgeArticle(id: string): KnowledgeManagedArticle | undefined {
   const article = store().find((item) => item.id === id);
   if (!article) return undefined;
   const now = new Date().toISOString();
+  const version = article.publishedSnapshot ? nextVersion(article.version) : "V1.0";
   article.status = "published";
-  article.version = article.publishedSnapshot ? nextVersion(article.version) : "V1.0";
-  article.publishedSnapshot = cloneFields(fieldsOf(article));
+  article.version = version;
   article.publishedAt = now;
   article.updatedAt = now;
-  return toPublic(article);
+  article.publishedSnapshot = { ...fieldsOf(article), version, publishedAt: now };
+  return toManagedArticle(article);
 }
 
-export function deactivateKnowledgeArticle(id: string): KnowledgeArticle | undefined {
+export function deactivateKnowledgeArticle(id: string): KnowledgeManagedArticle | undefined {
   const article = store().find((item) => item.id === id);
   if (!article) return undefined;
   article.status = "inactive";
   article.updatedAt = new Date().toISOString();
-  return toPublic(article);
+  return toManagedArticle(article);
 }
 
-export function getPublishedKnowledgeByTopic(topic: KnowledgeTopic): KnowledgeArticle | undefined {
+/** Compatibility helper for the current orchestrator. New integrations should use retrievePublishedKnowledge. */
+export function getPublishedKnowledgeByTopic(topic: KnowledgeTopic, effectiveAt = new Date().toISOString()): KnowledgeManagedArticle | undefined {
   const article = store()
-    .filter((item) => item.status === "published" && item.topic === topic && item.publishedSnapshot)
-    .sort((a, b) => new Date(b.publishedAt ?? b.updatedAt).getTime() - new Date(a.publishedAt ?? a.updatedAt).getTime())[0];
-  if (!article?.publishedSnapshot) return undefined;
-  return toPublic({ ...article, ...cloneFields(article.publishedSnapshot) });
+    .filter((item) => item.status === "published" && item.publishedSnapshot?.topic === topic)
+    .filter((item) => {
+      const snapshot = item.publishedSnapshot;
+      if (!snapshot) return false;
+      const at = new Date(effectiveAt).getTime();
+      return at >= new Date(snapshot.effectiveFrom).getTime()
+        && (!snapshot.effectiveTo || at <= new Date(snapshot.effectiveTo).getTime());
+    })
+    .sort((left, right) => new Date(right.publishedSnapshot?.publishedAt ?? 0).getTime() - new Date(left.publishedSnapshot?.publishedAt ?? 0).getTime())[0];
+  const snapshot = article?.publishedSnapshot;
+  if (!article || !snapshot) return undefined;
+  const { version, publishedAt, ...fields } = snapshot;
+  return {
+    ...cloneFields(fields),
+    id: article.id,
+    version,
+    status: "published",
+    updatedAt: publishedAt,
+    publishedAt,
+    hasUnpublishedChanges: hasChanges(article),
+  };
 }
 
-function scoreText(query: string, article: StoredKnowledgeArticle): number {
-  const normalized = query.trim().toLowerCase();
-  if (!normalized) return 0;
-  const text = [article.title, article.question, article.answer, article.topic, ...article.answerItems, ...article.tags].join(" ").toLowerCase();
-  const tokens = new Set([
-    normalized,
-    ...normalized.split(/[\s，。！？、,.!?]+/).filter((token) => token.length > 1),
-    ...Array.from({ length: Math.max(0, normalized.length - 1) }, (_, index) => normalized.slice(index, index + 2)),
-  ]);
-  const matches = [...tokens].filter((token) => text.includes(token));
-  return Math.min(0.99, Number((0.18 + matches.length * 0.11).toFixed(2)));
+export function retrievePublishedKnowledge(query: string, filters?: KnowledgeSearchFilters): KnowledgePreviewResponse {
+  return retrieveFromKnowledgeIndex({
+    articles: store().map(toPublishedIndex).filter((article): article is KnowledgeIndexArticle => Boolean(article)),
+    query,
+    filters,
+    mode: "published",
+  });
 }
 
-export function previewKnowledge(query: string, selectedArticleId?: string): KnowledgePreviewResult[] {
-  return store()
-    .map((article) => ({ article, score: scoreText(query, article) + (article.id === selectedArticleId ? 0.08 : 0) }))
-    .filter(({ score, article }) => score > 0.18 || article.id === selectedArticleId)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 5)
-    .map(({ article, score }) => ({
-      articleId: article.id,
-      title: article.title,
-      topic: article.topic,
-      status: article.status,
-      version: article.version,
-      score: Math.min(0.99, Number(score.toFixed(2))),
-      excerpt: article.answer.slice(0, 120),
-      selectedDraft: article.id === selectedArticleId,
-    }));
+export function previewKnowledge(query: string, selectedArticleId?: string, filters?: KnowledgeSearchFilters): KnowledgePreviewResponse {
+  return retrieveFromKnowledgeIndex({
+    articles: store().map((article) => article.id === selectedArticleId ? toWorkingIndex(article) : (toPublishedIndex(article) ?? toWorkingIndex(article))),
+    query,
+    filters,
+    mode: "preview",
+    selectedArticleId,
+  });
 }
 
 export function resetKnowledgeStore(): void {
   globalThis.customerServiceKnowledgeStore = createSeedStore();
+  globalThis.customerServiceKnowledgeDraftSequence = 0;
 }

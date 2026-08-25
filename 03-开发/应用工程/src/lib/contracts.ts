@@ -16,7 +16,7 @@ export type RouteModule = ServiceModule | "knowledge" | "conversation" | "handof
 
 /**
  * Cross-module contracts are frozen under this version. Changes require an
- * approved request in `04-开发/并行开发/变更申请/` and a version bump.
+ * approved request in `03-开发/并行开发/变更申请/` and a version bump.
  */
 export const PUBLIC_CONTRACT_VERSION = "1.0.0" as const;
 
