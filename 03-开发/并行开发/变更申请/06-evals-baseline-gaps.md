@@ -6,11 +6,19 @@
 
 **性质**：实现补齐，不申请修改 `contracts-v1` 公共判别值
 
+## 2026-08-28 P0 收口重新分派
+
+- 唯一代码基线更新为 `main@dc2c06d`。
+- 当前公共契约已经由已批准的真实多模态变更升级为 `PUBLIC_CONTRACT_VERSION=1.1.0`；本申请不再提出任何契约修改，1.1.0 继续冻结。
+- 原 `codex/badcase-runtime-images`、`codex/badcase-business-errors`、`codex/badcase-knowledge-states` 均停在 `d3619f1`，只保留追溯，不允许覆盖、rebase 或直接合并到当前 `main`。
+- 本轮替代分支为 `codex/p0-runtime-20260828`、`codex/p0-business-20260828`、`codex/p0-knowledge-20260828`，均从统一 P0 准备历史创建。
+- 实现责任和 03 → 02 → 01 的串行审查顺序不变；00 不代替功能对话修复 bad case。
+
 ## 00 审批结论
 
 **审批日期**：2026-08-25
 
-**结论**：批准进入下一轮实现，公共契约继续冻结在 `PUBLIC_CONTRACT_VERSION=1.0.0`，不升级 `contracts-v1`。
+**结论**：本段为 2026-08-25 历史审批；分支名和契约版本已由上方 2026-08-28 重新分派取代。
 
 | 顺序 | 责任对话 | 交付边界 | 修复分支 |
 | --- | --- | --- | --- |

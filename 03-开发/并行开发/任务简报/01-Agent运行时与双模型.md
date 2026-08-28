@@ -51,8 +51,8 @@
 ## 状态
 
 ```text
-状态：首轮已合并；下一轮图片路由 bad case 已批准
-基线提交：contracts-v1（0f8fa0b）
+状态：P0 收口已获准开始；只处理 01 所有权内图片路由能力
+基线提交：dc2c06d；分支 codex/p0-runtime-20260828
 交付提交：ed5fc3e；已通过 main 集成提交 351fb09 落位
-阻塞或契约申请：06-evals-baseline-gaps.md 申请 3；不修改公共契约
+阻塞或契约申请：06-evals-baseline-gaps.md 申请 3；公共契约 1.1.0 冻结
 ```

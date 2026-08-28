@@ -1,10 +1,10 @@
 # 客服 Agent 实验室并行开发计划
 
-**版本**：V1.2
-**日期**：2026-08-25
+**版本**：V1.3
+**日期**：2026-08-28
 **目标**：将当前可运行原型推进为结构清晰、可评测、可持续迭代的本地 Sandbox MVP，并让多个开发对话可以安全并行。
 
-> 当前状态：01–06 首轮开发已于 2026-08-25 串行合并到 `main`，全量门禁为 86/86 测试与生产构建通过。36 项固定 Evals 为 28/36；8 项已知缺口已批准进入下一轮，详见 `变更申请/06-evals-baseline-gaps.md` 和 `集成报告/2026-08-25-01-06.md`。
+> 当前状态：P0 收口代码基线统一为 `main@dc2c06d`，公共契约冻结在 `1.1.0`。全量门禁为 21 个测试文件、95/95 测试与生产构建通过；36 项固定 Evals 为 28/36，指纹 `fp-d1ce2a6d`。六个 P0 worktree 使用全新分支，旧功能分支和旧 `codex/badcase-*` 分支不参与本轮合并。
 
 ## 一、结论：怎么开对话
 
@@ -98,22 +98,22 @@ feat/operations-console
 feat/evals-badcase
 ```
 
-当前 Git 与 worktree 基线：
+2026-08-28 P0 收口使用以下全新分支和 worktree。旧 worktree 原样保留，仅用于追溯，不在其上覆盖、rebase 或合并本轮代码：
 
-| 对话 | 分支 | worktree | 起点 |
+| 对话 | 分支 | worktree | 代码基线 |
 | --- | --- | --- | --- |
-| 01 Runtime | `feat/agent-runtime` | `worktrees/客服Agent实验室/runtime` | `contracts-v1` |
-| 02 Business | `feat/business-workflows` | `worktrees/客服Agent实验室/business` | `contracts-v1` |
-| 03 Knowledge | `feat/knowledge-rag` | `worktrees/客服Agent实验室/knowledge-rag` | `contracts-v1` |
-| 04 Consumer | `feat/consumer-experience` | `worktrees/客服Agent实验室/consumer` | `contracts-v1` |
-| 05 Operations | `feat/operations-console` | `worktrees/客服Agent实验室/operations` | `contracts-v1` |
-| 06 Evals | `feat/evals-badcase` | `worktrees/客服Agent实验室/evals` | `contracts-v1` |
+| 01 Runtime | `codex/p0-runtime-20260828` | `worktrees/客服Agent实验室/p0-20260828/runtime` | `dc2c06d` |
+| 02 Business | `codex/p0-business-20260828` | `worktrees/客服Agent实验室/p0-20260828/business` | `dc2c06d` |
+| 03 Knowledge | `codex/p0-knowledge-20260828` | `worktrees/客服Agent实验室/p0-20260828/knowledge-rag` | `dc2c06d` |
+| 04 Consumer | `codex/p0-consumer-20260828` | `worktrees/客服Agent实验室/p0-20260828/consumer` | `dc2c06d` |
+| 05 Operations | `codex/p0-operations-20260828` | `worktrees/客服Agent实验室/p0-20260828/operations` | `dc2c06d` |
+| 06 Evals | `codex/p0-evals-20260828` | `worktrees/客服Agent实验室/p0-20260828/evals` | `dc2c06d` |
 
-表中路径均位于 `/Users/lengwen/Workspace/ai-project/` 下。六个分支只表示开发环境已就绪，不表示已启动开发或获得修改公共契约的权限。
+表中路径均位于 `/Users/lengwen/Workspace/ai-project/` 下。01 / 02 / 03 在 00 发出启动通知后可开始；04 / 05 / 06 仅准备基线，等待依赖或集成通知。六个分支均不得修改公共契约。
 
 ### 2. 五类公共契约（已冻结）
 
-权威定义位于 `应用工程/src/lib/contracts.ts`，版本常量为 `PUBLIC_CONTRACT_VERSION=1.0.0`，Git 标签为 `contracts-v1`：
+权威定义位于 `应用工程/src/lib/contracts.ts`，当前版本常量为 `PUBLIC_CONTRACT_VERSION=1.1.0`。`contracts-v1` 标签仅保留 1.0.0 历史基线；本轮以 `dc2c06d` 中的 1.1.0 定义为准，暂不修改契约：
 
 1. `AgentEvent`：`progress`、`token`、`ui`、`final`、`error`。
 2. `ToolResult<T>`：成功、空结果、超时、业务拒绝、系统失败、来源元数据。
@@ -353,7 +353,7 @@ cd 03-开发/应用工程
 pnpm check
 ```
 
-该命令串行执行全量 Vitest 与 Next.js 生产构建。契约冻结时基线为 28 项测试。
+该命令串行执行全量 Vitest 与 Next.js 生产构建。2026-08-28 的 P0 收口基线为 21 个测试文件、95 项测试。
 
 ## 八、多个对话之间怎么沟通
 
