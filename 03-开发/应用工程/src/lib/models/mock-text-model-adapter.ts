@@ -5,6 +5,8 @@ import { throwForMockBehavior, throwIfModelAborted } from "./model-error";
 import type {
   MockModelBehavior,
   ModelCallOptions,
+  TextAnswerInput,
+  TextAnswerOutput,
   TextModelAdapter,
   TextRouteInput,
   TextRouteOutput,
@@ -19,6 +21,7 @@ export class MockTextModelAdapter implements TextModelAdapter {
   readonly model = "mock-text-router-v1";
   readonly mode = "mock" as const;
   callCount = 0;
+  answerCallCount = 0;
   lastInput?: TextRouteInput;
   private readonly behavior: MockModelBehavior;
 
@@ -51,6 +54,18 @@ export class MockTextModelAdapter implements TextModelAdapter {
 
     return {
       raw: this.behavior === "invalid_json" ? "{invalid-model-json" : JSON.stringify(route),
+      provider: this.provider,
+      model: this.model,
+      mode: this.mode,
+    };
+  }
+
+  async answer(input: TextAnswerInput, options: ModelCallOptions = {}): Promise<TextAnswerOutput> {
+    this.answerCallCount += 1;
+    throwIfModelAborted(options.signal);
+    if (this.behavior !== "success" && this.behavior !== "invalid_json") throwForMockBehavior(this.behavior);
+    return {
+      text: input.workflowResult.message,
       provider: this.provider,
       model: this.model,
       mode: this.mode,

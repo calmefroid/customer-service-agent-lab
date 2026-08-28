@@ -58,6 +58,18 @@ function createId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => typeof reader.result === "string"
+      ? resolve(reader.result)
+      : reject(new Error("图片读取结果无效"));
+    reader.onerror = () => reject(reader.error ?? new Error("图片读取失败"));
+    reader.onabort = () => reject(new Error("图片读取已取消"));
+    reader.readAsDataURL(file);
+  });
+}
+
 function closeLatestConfirmation(messages: LocalMessage[]): LocalMessage[] {
   const confirmationKinds = new Set<ChatUi["kind"]>(["return_confirm", "logistics_urge_confirm", "service_ticket_form"]);
   const index = messages.findLastIndex((message) => message.ui && confirmationKinds.has(message.ui.kind));
@@ -212,9 +224,20 @@ export default function Home() {
 
   async function sendMessage(message = input.trim(), module = activeModule) {
     if (busy || (!message && !pendingAttachment)) return;
-    const attachment: AttachmentMeta | undefined = pendingAttachment
-      ? { name: pendingAttachment.file.name, type: pendingAttachment.file.type, size: pendingAttachment.file.size }
-      : undefined;
+    let attachment: AttachmentMeta | undefined;
+    if (pendingAttachment) {
+      try {
+        attachment = {
+          name: pendingAttachment.file.name,
+          type: pendingAttachment.file.type,
+          size: pendingAttachment.file.size,
+          dataUrl: await readFileAsDataUrl(pendingAttachment.file),
+        };
+      } catch {
+        setToast("图片读取失败，请重新选择");
+        return;
+      }
+    }
     const text = message || "这是刚收到的灯具照片";
     const payload: RequestPayload = { message: text, ...(attachment ? { attachment } : {}), ...(module ? { module } : {}) };
     const image = pendingAttachment ? {

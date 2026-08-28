@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 
-import type { ChatRequest } from "@/lib/contracts";
-import { runRegisteredAgent } from "@/lib/orchestration/mock-compatibility";
-import { listTraces } from "@/lib/trace-store";
+import { validateAttachment } from "@/lib/agent-runtime/attachment-validation";
+import { createConfiguredAgentRuntime } from "@/lib/agent-runtime/configured-runtime";
+import type { AgentPublicError, ChatRequest, ChatResponse } from "@/lib/contracts";
 
 export const runtime = "nodejs";
 
@@ -20,15 +20,8 @@ export async function POST(request: Request) {
   if (typeof body.message !== "string") {
     return NextResponse.json({ error: "message 必须为字符串" }, { status: 400 });
   }
-  if (body.attachment) {
-    const allowedTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
-    if (!allowedTypes.has(body.attachment.type)) {
-      return NextResponse.json({ error: "图片格式不支持" }, { status: 400 });
-    }
-    if (body.attachment.size > 8 * 1024 * 1024) {
-      return NextResponse.json({ error: "图片不能超过 8MB" }, { status: 400 });
-    }
-  }
+  const attachmentError = validateAttachment(body.attachment);
+  if (attachmentError) return NextResponse.json({ error: attachmentError }, { status: 400 });
   if (body.action === "submit_return") {
     const form = body.formData;
     const complete =
@@ -58,15 +51,16 @@ export async function POST(request: Request) {
     }
   }
 
-  const mode = process.env.MODEL_MODE ?? "mock";
-  if (mode !== "mock") {
-    return NextResponse.json(
-      { error: "Live 模型 Adapter 尚未配置，请使用 MODEL_MODE=mock" },
-      { status: 503 },
-    );
+  const agent = createConfiguredAgentRuntime();
+  let finalResponse: ChatResponse | undefined;
+  let publicError: AgentPublicError | undefined;
+  for await (const event of agent.run(body as ChatRequest, { signal: request.signal })) {
+    if (event.type === "final") finalResponse = event.response;
+    if (event.type === "error") publicError = event.error;
   }
-
-  const response = await runRegisteredAgent(body as ChatRequest);
-  const trace = listTraces(body.sessionId).find((record) => record.traceId === response.traceId);
-  return NextResponse.json({ ...response, route: trace?.route });
+  if (finalResponse) return NextResponse.json(finalResponse);
+  return NextResponse.json(
+    { error: publicError?.message ?? "请求未完成", code: publicError?.code },
+    { status: publicError?.retryable ? 503 : 422 },
+  );
 }

@@ -1,4 +1,4 @@
-import type { AttachmentMeta } from "@/lib/contracts";
+import type { AttachmentMeta, Intent, RiskLevel, RouteDecision } from "@/lib/contracts";
 import type { SessionMessage } from "@/lib/sessions";
 
 export type ModelMode = "mock" | "live";
@@ -27,6 +27,26 @@ export interface TextRouteOutput {
   mode: ModelMode;
 }
 
+export interface TextAnswerInput {
+  message: string;
+  route: RouteDecision;
+  history: SessionMessage[];
+  observations: string[];
+  workflowResult: {
+    message: string;
+    intent: Intent;
+    riskLevel: RiskLevel;
+    uiKind?: string;
+  };
+}
+
+export interface TextAnswerOutput {
+  text: string;
+  provider: string;
+  model: string;
+  mode: ModelMode;
+}
+
 export interface MultimodalInput {
   message: string;
   module?: "logistics" | "return" | "repair";
@@ -49,6 +69,7 @@ export interface TextModelAdapter {
   readonly model: string;
   readonly mode: ModelMode;
   route(input: TextRouteInput, options?: ModelCallOptions): Promise<TextRouteOutput>;
+  answer(input: TextAnswerInput, options?: ModelCallOptions): Promise<TextAnswerOutput>;
 }
 
 export interface MultimodalModelAdapter {

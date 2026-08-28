@@ -9,7 +9,7 @@ import {
 } from "@/components/chat/stream-state";
 
 const base = {
-  contractVersion: "1.0.0",
+  contractVersion: "1.1.0",
   sessionId: "consumer-test",
   createdAt: "2026-08-25T00:00:00.000Z",
   traceId: "TR-consumer",

@@ -1,0 +1,53 @@
+import { runRegisteredAgent } from "@/lib/orchestration/mock-compatibility";
+import { createDefaultModelAdapters, type ModelMode } from "@/lib/models";
+
+import { AgentRuntime } from "./agent-runtime";
+import { defaultRuntimeSessions, defaultRuntimeTraceStore } from "./runtime-singletons";
+import type { RuntimeWorkflowExecutor } from "./types";
+
+function modelMode(value: string | undefined, fallback: ModelMode): ModelMode {
+  return value === "live" ? "live" : value === "mock" ? "mock" : fallback;
+}
+
+function positiveInteger(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function imageDetail(value: string | undefined): "low" | "high" | "auto" | undefined {
+  return value === "low" || value === "high" || value === "auto" ? value : undefined;
+}
+
+export function createConfiguredAgentRuntime(): AgentRuntime {
+  const defaultMode = modelMode(process.env.MODEL_MODE, "mock");
+  const unifiedModel = process.env.UNIFIED_MODEL_MODE === "true";
+  const textBaseUrl = process.env.TEXT_MODEL_BASE_URL;
+  const textApiKey = process.env.TEXT_MODEL_API_KEY;
+  const textModel = process.env.TEXT_MODEL_NAME;
+  const adapters = createDefaultModelAdapters({
+    mode: defaultMode,
+    textMode: modelMode(process.env.TEXT_MODEL_MODE, defaultMode),
+    multimodalMode: modelMode(process.env.MULTIMODAL_MODEL_MODE, defaultMode),
+    textBaseUrl,
+    textApiKey,
+    textModel,
+    textMaxTokens: positiveInteger(process.env.TEXT_MODEL_MAX_TOKENS),
+    multimodalBaseUrl: unifiedModel ? textBaseUrl : process.env.MULTIMODAL_MODEL_BASE_URL,
+    multimodalApiKey: unifiedModel ? textApiKey : process.env.MULTIMODAL_MODEL_API_KEY,
+    multimodalModel: unifiedModel ? textModel : process.env.MULTIMODAL_MODEL_NAME,
+    multimodalProvider: unifiedModel ? "OppleAliModelGateway" : process.env.MULTIMODAL_MODEL_PROVIDER,
+    multimodalMaxTokens: positiveInteger(process.env.MULTIMODAL_MODEL_MAX_TOKENS),
+    multimodalImageDetail: imageDetail(process.env.MULTIMODAL_IMAGE_DETAIL),
+  });
+  const workflow: RuntimeWorkflowExecutor = {
+    execute: (chatRequest) => runRegisteredAgent(chatRequest),
+  };
+  return new AgentRuntime({
+    ...adapters,
+    workflow,
+    sessions: defaultRuntimeSessions,
+    traceSink: defaultRuntimeTraceStore,
+    modelTimeoutMs: positiveInteger(process.env.MODEL_TIMEOUT_MS),
+  });
+}

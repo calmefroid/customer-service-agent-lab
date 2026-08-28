@@ -1,11 +1,8 @@
 import { NextResponse } from "next/server";
 
-import { AgentRuntime } from "@/lib/agent-runtime/agent-runtime";
-import { defaultRuntimeSessions, defaultRuntimeTraceStore } from "@/lib/agent-runtime/runtime-singletons";
-import type { RuntimeWorkflowExecutor } from "@/lib/agent-runtime/types";
+import { validateAttachment } from "@/lib/agent-runtime/attachment-validation";
+import { createConfiguredAgentRuntime } from "@/lib/agent-runtime/configured-runtime";
 import type { AgentEvent, ChatRequest } from "@/lib/contracts";
-import { createDefaultModelAdapters } from "@/lib/models";
-import { runRegisteredAgent } from "@/lib/orchestration/mock-compatibility";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,11 +14,8 @@ function invalidRequest(message: string) {
 function validateChatRequest(body: Partial<ChatRequest>): string | undefined {
   if (!body.sessionId || typeof body.sessionId !== "string") return "缺少 sessionId";
   if (typeof body.message !== "string") return "message 必须为字符串";
-  if (body.attachment) {
-    if (!new Set(["image/jpeg", "image/png", "image/webp"]).has(body.attachment.type)) return "图片格式不支持";
-    if (body.attachment.size > 8 * 1024 * 1024) return "图片不能超过 8MB";
-    if (body.attachment.size < 0) return "图片大小无效";
-  }
+  const attachmentError = validateAttachment(body.attachment);
+  if (attachmentError) return attachmentError;
   if (body.action === "submit_return") {
     const form = body.formData;
     if (!form || ![form.product, form.issueDescription, form.contactPhone, form.pickupAddress].every((value) => typeof value === "string" && value.trim())) return "退换货申请信息不完整";
@@ -47,21 +41,7 @@ export async function POST(request: Request) {
   const validationError = validateChatRequest(body);
   if (validationError) return invalidRequest(validationError);
 
-  const mode = process.env.MODEL_MODE === "live" ? "live" : "mock";
-  const adapters = createDefaultModelAdapters({
-    mode,
-    textApiKey: process.env.TEXT_MODEL_API_KEY,
-    multimodalApiKey: process.env.MULTIMODAL_MODEL_API_KEY,
-  });
-  const workflow: RuntimeWorkflowExecutor = {
-    execute: (chatRequest) => runRegisteredAgent(chatRequest),
-  };
-  const agent = new AgentRuntime({
-    ...adapters,
-    workflow,
-    sessions: defaultRuntimeSessions,
-    traceSink: defaultRuntimeTraceStore,
-  });
+  const agent = createConfiguredAgentRuntime();
   const chatRequest = body as ChatRequest;
 
   const stream = new ReadableStream<Uint8Array>({

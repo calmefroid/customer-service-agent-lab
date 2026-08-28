@@ -7,7 +7,28 @@
 - `agent-runtime/` 负责模型选择、结构化路由校验、规则兜底、Abort 门禁、公开事件与后台 TraceEvent。
 - `/api/chat/stream` 把 `AgentEvent` 编码为 SSE；既有业务编排通过 `RuntimeWorkflowExecutor` 注入。
 
-无模型 Key 时使用两个确定性的 Mock Adapter。`MODEL_MODE=live` 目前返回 Adapter 未配置错误，不会猜测尚未提供的正式 API 格式。
+无模型 Key 时使用两个确定性的 Mock Adapter。文字模型已支持通过欧普阿里模型网关的 OpenAI Chat Completions 兼容接口调用 `Qwen3.6-27B`。
+
+推荐使用独立模式开关：
+
+```env
+MODEL_MODE=mock
+TEXT_MODEL_MODE=live
+MULTIMODAL_MODEL_MODE=live
+UNIFIED_MODEL_MODE=true
+TEXT_MODEL_BASE_URL=https://opai-console.opple.com/v1/chat/completions
+TEXT_MODEL_API_KEY=仅写在.env.local的密钥
+TEXT_MODEL_NAME=Qwen3.6-27B
+MULTIMODAL_MODEL_BASE_URL=https://opai-console.opple.com/v1/chat/completions
+MULTIMODAL_MODEL_NAME=Qwen3.6-27B
+MULTIMODAL_MODEL_PROVIDER=OppleAliModelGateway
+MULTIMODAL_MODEL_MAX_TOKENS=1000
+MULTIMODAL_IMAGE_DETAIL=high
+```
+
+`TEXT_MODEL_MODE=live` 会让真实模型负责结构化路由，并在低风险工作流完成后根据工具 / RAG 结果生成消费者回答。高风险安全话术、人工转接和写操作确认保留确定性输出。
+
+`UNIFIED_MODEL_MODE=true` 时，文字路由、回答生成和图片理解都复用 `TEXT_MODEL_BASE_URL` / `TEXT_MODEL_API_KEY` / `TEXT_MODEL_NAME`，当前统一为 `Qwen3.6-27B`。前端将 JPG / PNG / WEBP 转为 Base64 Data URL，服务端校验 MIME、大小和编码后传给模型。原始图片内容不写入 Trace，Trace 只保留文件名、类型、大小和模型观察结果。
 
 ## 主要接口
 

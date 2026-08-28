@@ -3,6 +3,7 @@ import type {
   ModelCallOptions,
   MultimodalInput,
   MultimodalModelAdapter,
+  TextAnswerInput,
   TextModelAdapter,
   TextRouteInput,
 } from "./types";
@@ -13,6 +14,11 @@ export class UnavailableTextModelAdapter implements TextModelAdapter {
   readonly mode = "live" as const;
 
   async route(_input: TextRouteInput, options: ModelCallOptions = {}): Promise<never> {
+    throwIfModelAborted(options.signal);
+    throw new ModelAdapterError("unavailable", "文字模型 Adapter 尚未配置", true);
+  }
+
+  async answer(_input: TextAnswerInput, options: ModelCallOptions = {}): Promise<never> {
     throwIfModelAborted(options.signal);
     throw new ModelAdapterError("unavailable", "文字模型 Adapter 尚未配置", true);
   }

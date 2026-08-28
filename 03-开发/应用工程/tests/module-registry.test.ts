@@ -13,7 +13,7 @@ const request = { sessionId: "registry-test", message: "test" };
 
 describe("public contracts v1", () => {
   it("freezes the cross-module discriminators", () => {
-    expect(PUBLIC_CONTRACT_VERSION).toBe("1.0.0");
+    expect(PUBLIC_CONTRACT_VERSION).toBe("1.1.0");
     expect(AGENT_EVENT_TYPES).toEqual(["progress", "token", "ui", "final", "error"]);
     expect(TOOL_RESULT_STATUSES).toEqual([
       "success",

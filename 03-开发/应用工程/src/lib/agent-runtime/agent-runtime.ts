@@ -25,6 +25,7 @@ function redactString(value: string): string {
 
 function sanitizeForTrace(value: unknown, key = ""): unknown {
   if (/api.?key|authorization|secret|token/i.test(key)) return "***";
+  if (/data.?url|base64|image.?data/i.test(key)) return "[REDACTED_IMAGE_PAYLOAD]";
   if (typeof value === "string") return redactString(value);
   if (Array.isArray(value)) return value.map((item) => sanitizeForTrace(item));
   if (value && typeof value === "object") {
@@ -270,6 +271,28 @@ export class AgentRuntime {
           },
         });
       }
+      const deterministicGuard = fallbackRoute({ ...request, observations });
+      if (request.action || deterministicGuard.topic.startsWith("safety.") || deterministicGuard.requiresHuman) {
+        route = deterministicGuard;
+        appendTrace({
+          type: "route",
+          status: "completed",
+          payload: {
+            selected: route,
+            candidates: [{ intent: route.intent, topic: route.topic, score: route.confidence }],
+          },
+        });
+        appendTrace({
+          type: "rule",
+          status: "completed",
+          payload: {
+            ruleId: "RULE-DETERMINISTIC-GUARD-001",
+            matched: true,
+            evidence: [request.action ?? deterministicGuard.topic],
+            effect: "override_model_route",
+          },
+        });
+      }
       this.sessions.setRemainingIntents(request.sessionId, route.remainingIntents);
       appendTrace({ type: "route", status: "completed", durationMs: this.now().getTime() - routeStartedAt, payload: { selected: route, candidates: [{ intent: route.intent, topic: route.topic, score: route.confidence }] } });
       yield makeEvent<Extract<AgentEvent, { type: "progress" }>>({
@@ -309,10 +332,81 @@ export class AgentRuntime {
         progress: { stage: "workflow", label: "请求处理完成", status: "completed", durationMs: this.now().getTime() - workflowStartedAt },
       });
 
+      let responseMessage = workflowResponse.message;
+      if (this.dependencies.textModel.mode === "live" && workflowResponse.riskLevel === "low") {
+        const answerStartedAt = this.now().getTime();
+        yield makeEvent<Extract<AgentEvent, { type: "progress" }>>({
+          type: "progress",
+          progress: { stage: "answer_generation", label: "正在整理回复", status: "started" },
+        });
+        try {
+          const answer = await withTimeout(
+            (signal) => this.dependencies.textModel.answer({
+              message: request.message,
+              route,
+              history: this.sessions.getOrCreate(request.sessionId).messages,
+              observations,
+              workflowResult: {
+                message: workflowResponse.message,
+                intent: workflowResponse.intent,
+                riskLevel: workflowResponse.riskLevel,
+                ...(workflowResponse.ui ? { uiKind: workflowResponse.ui.kind } : {}),
+              },
+            }, { signal }),
+            options.signal,
+            this.modelTimeoutMs,
+          );
+          responseMessage = answer.text;
+          appendTrace({
+            type: "model",
+            status: "completed",
+            durationMs: this.now().getTime() - answerStartedAt,
+            payload: {
+              provider: answer.provider,
+              model: answer.model,
+              mode: answer.mode,
+              inputSummary: JSON.stringify(sanitizeForTrace({
+                templateId: "consumer-answer-system",
+                version: "runtime-v1",
+                route,
+                observations,
+                workflowResult: {
+                  message: workflowResponse.message,
+                  intent: workflowResponse.intent,
+                  riskLevel: workflowResponse.riskLevel,
+                  uiKind: workflowResponse.ui?.kind,
+                },
+              })),
+              outputSummary: redactString(answer.text),
+            },
+          });
+          yield makeEvent<Extract<AgentEvent, { type: "progress" }>>({
+            type: "progress",
+            progress: { stage: "answer_generation", label: "回复已生成", status: "completed", durationMs: this.now().getTime() - answerStartedAt },
+          });
+        } catch (error) {
+          if (options.signal?.aborted || error instanceof ModelAdapterError && error.code === "cancelled") throw error;
+          appendTrace({
+            type: "error",
+            status: "completed",
+            payload: {
+              code: "MODEL_ANSWER_FALLBACK",
+              message: "模型回答生成失败，已使用工作流安全回复",
+              retryable: false,
+              internalCode: error instanceof Error ? error.name : "UNKNOWN_ANSWER_ERROR",
+            },
+          });
+          yield makeEvent<Extract<AgentEvent, { type: "progress" }>>({
+            type: "progress",
+            progress: { stage: "answer_generation", label: "已使用安全回复", status: "completed", durationMs: this.now().getTime() - answerStartedAt },
+          });
+        }
+      }
+
       if (workflowResponse.ui) {
         yield makeEvent<Extract<AgentEvent, { type: "ui" }>>({ type: "ui", ui: workflowResponse.ui });
       }
-      for (const delta of chunks(workflowResponse.message)) {
+      for (const delta of chunks(responseMessage)) {
         if (stopped()) {
           yield stoppedEvent();
           return;
@@ -322,7 +416,7 @@ export class AgentRuntime {
 
       // 不把 workflow 内部 route/debug 对象带到消费者流中。
       const finalResponse: ChatResponse = {
-        message: workflowResponse.message,
+        message: responseMessage,
         intent: workflowResponse.intent,
         riskLevel: workflowResponse.riskLevel,
         traceId,
