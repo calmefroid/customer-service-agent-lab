@@ -27,7 +27,7 @@ function response(overrides: Partial<ChatResponse> = {}): ChatResponse {
   };
 }
 
-function workflow(run = vi.fn(async () => response())): RuntimeWorkflowExecutor {
+function workflow(run: RuntimeWorkflowExecutor["execute"] = vi.fn(async () => response())): RuntimeWorkflowExecutor {
   return { execute: run };
 }
 
@@ -47,42 +47,79 @@ describe("AgentRuntime model routing", () => {
     expect(events.at(-1)?.type).toBe("final");
   });
 
-  it("answers an observation-only image with the multimodal adapter", async () => {
+  it("answers a clear nameplate with the multimodal adapter only", async () => {
     const text = new MockTextModelAdapter();
-    const vision = new MockMultimodalModelAdapter({ requiresBusinessRouting: false });
+    const vision = new MockMultimodalModelAdapter();
     const execute = vi.fn(async () => response());
     const runtime = new AgentRuntime({ textModel: text, multimodalModel: vision, workflow: workflow(execute) });
 
     const events = await collect(runtime, {
       sessionId: "S-image-observe",
       message: "帮我看看铭牌上是什么型号",
-      attachment: { name: "plate.jpg", type: "image/jpeg", size: 42_000 },
+      attachment: { name: "virtual-nameplate.jpg", type: "image/jpeg", size: 42_000 },
     });
 
     expect(vision.callCount).toBe(1);
     expect(text.callCount).toBe(0);
     expect(execute).not.toHaveBeenCalled();
     const final = events.find((event) => event.type === "final");
-    expect(final?.type === "final" && final.response.message).toContain("可见");
+    expect(final?.type === "final" && final.response).toMatchObject({ intent: "knowledge_query", riskLevel: "low" });
+    expect(final?.type === "final" && final.response.message).toContain("LUM-36W");
   });
 
-  it("observes an image before using text routing for a business application", async () => {
+  it("asks for a clearer nameplate photo without entering return workflow", async () => {
     const text = new MockTextModelAdapter();
-    const vision = new MockMultimodalModelAdapter({ requiresBusinessRouting: true });
+    const vision = new MockMultimodalModelAdapter();
     const execute = vi.fn(async () => response({ intent: "return_exchange" }));
+    const runtime = new AgentRuntime({ textModel: text, multimodalModel: vision, workflow: workflow(execute) });
+
+    const events = await collect(runtime, {
+      sessionId: "S-image-blurry",
+      message: "这张铭牌很模糊，能看清吗",
+      module: "return",
+      attachment: { name: "virtual-blurry.jpg", type: "image/jpeg", size: 700 },
+    });
+
+    expect(vision.callCount).toBe(1);
+    expect(text.callCount).toBe(0);
+    expect(execute).not.toHaveBeenCalled();
+    const final = events.find((event) => event.type === "final");
+    expect(final?.type === "final" && final.response).toMatchObject({ intent: "clarification", riskLevel: "low" });
+    expect(final?.type === "final" && final.response.message).toContain("无法确认");
+    expect(final?.type === "final" && final.response.message).toContain("补拍");
+  });
+
+  it("protects arrival damage flow through observation, text routing and return draft workflow", async () => {
+    const text = new MockTextModelAdapter();
+    const vision = new MockMultimodalModelAdapter();
+    const execute = vi.fn(async (_request: ChatRequest, context: RuntimeWorkflowContext) => response({
+      intent: context.route.intent,
+      riskLevel: "medium",
+      ui: {
+        kind: "return_confirm",
+        form: {
+          serviceType: "换货",
+          product: "悦享吸顶灯",
+          issueDescription: "到货破损（待人工复核）",
+          contactPhone: "138****6821",
+          pickupAddress: "演示地址",
+        },
+      },
+    }));
     const runtime = new AgentRuntime({ textModel: text, multimodalModel: vision, workflow: workflow(execute) });
 
     await collect(runtime, {
       sessionId: "S-image-return",
-      message: "灯罩收到时碎了，帮我申请换货",
-      module: "return",
-      attachment: { name: "damage.jpg", type: "image/jpeg", size: 42_000 },
+      message: "请根据图片帮我处理",
+      attachment: { name: "virtual-damage.jpg", type: "image/jpeg", size: 42_000 },
     });
 
     expect(vision.callCount).toBe(1);
     expect(text.callCount).toBe(1);
     expect(execute).toHaveBeenCalledOnce();
     expect(text.lastInput?.observations[0]).toContain("可见");
+    const firstCall = execute.mock.calls[0] as unknown as [ChatRequest, RuntimeWorkflowContext];
+    expect(firstCall[1].route).toMatchObject({ intent: "return_exchange", module: "return", topic: "return.arrival_damage" });
   });
 
   it("uses mock adapters when no model keys are configured", () => {
@@ -141,6 +178,35 @@ describe("AgentRuntime safety and failures", () => {
     expect(traces.list().some((event) => event.type === "error" && event.payload.internalCode === "MODEL_OUTPUT_INVALID")).toBe(true);
     const modelTrace = traces.list().find((event) => event.type === "model");
     expect(modelTrace?.type === "model" && modelTrace.payload.inputSummary).toContain("applicationSystemPrompt");
+  });
+
+  it("omits data URLs and Base64 payloads from runtime trace and consumer events", async () => {
+    const traces = new InMemoryRuntimeTraceStore();
+    const runtime = new AgentRuntime({
+      textModel: new MockTextModelAdapter(),
+      multimodalModel: new MockMultimodalModelAdapter(),
+      workflow: workflow(),
+      traceSink: traces,
+    });
+
+    const events = await collect(runtime, {
+      sessionId: "S-trace-image-redaction",
+      message: "帮我看看铭牌型号",
+      attachment: {
+        name: "virtual-nameplate.jpg",
+        type: "image/jpeg",
+        size: 1,
+        dataUrl: "data:image/jpeg;base64,AA==",
+      },
+    });
+    const traceJson = JSON.stringify(traces.list());
+    const consumerJson = JSON.stringify(events);
+
+    expect(traceJson).not.toMatch(/dataUrl|base64|AA==/i);
+    expect(consumerJson).not.toMatch(/dataUrl|base64|AA==/i);
+    const final = events.at(-1);
+    expect(final?.type === "final" && final.response).not.toHaveProperty("debug");
+    expect(final?.type === "final" && final.response).not.toHaveProperty("route");
   });
 
   it.each([

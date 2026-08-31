@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { OpenAICompatibleMultimodalModelAdapter, createDefaultModelAdapters } from "@/lib/models";
+import { MockMultimodalModelAdapter, OpenAICompatibleMultimodalModelAdapter, createDefaultModelAdapters } from "@/lib/models";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -69,6 +69,39 @@ describe("OpenAICompatibleMultimodalModelAdapter", () => {
       history: [],
     })).rejects.toMatchObject({ code: "unavailable", retryable: false });
     expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("keeps live and mock observation outputs structurally identical", async () => {
+    const fetcher = vi.fn(async () => jsonResponse({
+      choices: [{ message: { content: '{"summary":"铭牌上可见型号 LUM-36W","uncertainties":[],"responseText":"可见型号为 LUM-36W。","requiresBusinessRouting":false}' } }],
+    }));
+    const liveOutput = await adapterWith(fetcher as unknown as typeof fetch).observe({
+      message: "看铭牌",
+      attachment: { name: "nameplate.jpg", type: "image/jpeg", size: 1, dataUrl: "data:image/jpeg;base64,AA==" },
+      history: [],
+    });
+    const mockOutput = await new MockMultimodalModelAdapter().observe({
+      message: "看铭牌型号",
+      attachment: { name: "virtual-nameplate.jpg", type: "image/jpeg", size: 1 },
+      history: [],
+    });
+
+    expect(Object.keys(liveOutput).sort()).toEqual(Object.keys(mockOutput).sort());
+  });
+
+  it("replaces forbidden image-only decisions with a safe boundary response", async () => {
+    const fetcher = vi.fn(async () => jsonResponse({
+      choices: [{ message: { content: '{"summary":"确认是假货，符合退换资格","uncertainties":[],"responseText":"图片证明是假货，可以退换。","requiresBusinessRouting":true}' } }],
+    }));
+    const output = await adapterWith(fetcher as unknown as typeof fetch).observe({
+      message: "帮我看真假",
+      attachment: { name: "product.jpg", type: "image/jpeg", size: 1, dataUrl: "data:image/jpeg;base64,AA==" },
+      history: [],
+    });
+
+    expect(output.requiresBusinessRouting).toBe(true);
+    expect(output.responseText).toContain("无法仅凭图片确认真伪、责任、退换资格或赔偿结果");
+    expect(output.responseText).not.toMatch(/可以退换|符合退换资格|确认是假货/);
   });
 
   it("creates independent live text and multimodal adapters", () => {

@@ -18,6 +18,9 @@ import type { AgentRuntimeDependencies, RuntimeRunOptions } from "./types";
 
 function redactString(value: string): string {
   return value
+    .replace(/data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=]+/gi, "[REDACTED_IMAGE_PAYLOAD]")
+    .replace(/data.?url|image.?data/gi, "[REDACTED_IMAGE_FIELD]")
+    .replace(/base64/gi, "[REDACTED_ENCODING]")
     .replace(/1\d{2}\d{4}(\d{4})/g, "1********$1")
     .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "***@***")
     .replace(/(sk-|api[_-]?key[=: ]+)[A-Za-z0-9_-]+/gi, "$1***");
@@ -25,11 +28,15 @@ function redactString(value: string): string {
 
 function sanitizeForTrace(value: unknown, key = ""): unknown {
   if (/api.?key|authorization|secret|token/i.test(key)) return "***";
-  if (/data.?url|base64|image.?data/i.test(key)) return "[REDACTED_IMAGE_PAYLOAD]";
+  if (/data.?url|base64|image.?data/i.test(key)) return undefined;
   if (typeof value === "string") return redactString(value);
   if (Array.isArray(value)) return value.map((item) => sanitizeForTrace(item));
   if (value && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).map(([childKey, childValue]) => [childKey, sanitizeForTrace(childValue, childKey)]));
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([childKey]) => !/data.?url|base64|image.?data/i.test(childKey))
+        .map(([childKey, childValue]) => [childKey, sanitizeForTrace(childValue, childKey)]),
+    );
   }
   return value;
 }
