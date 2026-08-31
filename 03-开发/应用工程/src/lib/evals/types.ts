@@ -3,6 +3,7 @@ import type {
   ChatResponse,
   Intent,
   RiskLevel,
+  RouteDecision,
   RouteModule,
   TraceRecord,
 } from "@/lib/contracts";
@@ -109,6 +110,8 @@ export interface EvalToolObservation {
 
 export interface EvalActual {
   response: ChatResponse | null;
+  /** Internal evaluator observation; never included in the consumer response. */
+  route?: RouteDecision;
   trace: TraceRecord | null;
   toolCalls: EvalToolObservation[];
   sourceSystems: string[];

@@ -43,6 +43,7 @@ describe("eval runner", () => {
   it("runs the full baseline and keeps every failed result traceable", async () => {
     const run = await runEvals();
     expect(run.total).toBe(EVAL_CASES.length);
+    expect(run).toMatchObject({ total: 36, passed: 36, failed: 0, passRate: 100 });
     expect(run.results.filter((item) => !item.passed).every((item) => item.traceId && item.badCaseLabels.length)).toBe(true);
   });
 });

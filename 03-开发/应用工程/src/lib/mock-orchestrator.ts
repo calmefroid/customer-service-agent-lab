@@ -1,7 +1,14 @@
 import { getLatestOrder } from "@/lib/adapters/order-mock-adapter";
-import { findKnowledge, searchKnowledge } from "@/lib/adapters/knowledge-mock-adapter";
+import {
+  findKnowledge,
+  knowledgeSandbox,
+  retrieveKnowledgeByQuery,
+  searchKnowledge,
+} from "@/lib/adapters/knowledge-mock-adapter";
+import { omsMockAdapter } from "@/lib/adapters/oms-mock-adapter";
 import { queryProductKnowledge } from "@/lib/adapters/product-mock-adapter";
 import { getLatestServiceTicket } from "@/lib/adapters/service-mock-adapter";
+import { tmsMockAdapter } from "@/lib/adapters/tms-mock-adapter";
 import type {
   ChatRequest,
   ChatResponse,
@@ -21,6 +28,7 @@ import type {
   ServiceTicketDraft,
   WorkflowContext,
 } from "@/lib/domain/business";
+import type { AdapterCallOptions } from "@/lib/domain/business";
 import { businessWorkflowService } from "@/lib/domain/business-workflow";
 import { DEMO_CUSTOMER_ID } from "@/lib/mock-data/business-fixtures";
 import { appendTrace } from "@/lib/trace-store";
@@ -28,6 +36,20 @@ import { appendTrace } from "@/lib/trace-store";
 const safetyPattern = /冒烟|烧焦|触电|火花|异常发热|明显过热|漏电|起火/;
 const requestedHumanPattern = /转人工|人工客服|找客服|真人客服|人工处理/;
 const disputePattern = /赔偿|判责|谁的责任|投诉|消协|必须赔|资格争议|拒绝处理/;
+
+type InjectedToolOutcome = Exclude<AdapterCallOptions["outcome"], undefined>;
+
+export interface MockOrchestrationOptions {
+  route?: RouteDecision;
+  toolOutcomes?: {
+    latestOrder?: InjectedToolOutcome;
+    shipment?: InjectedToolOutcome;
+    returnExchange?: InjectedToolOutcome;
+    serviceTicket?: InjectedToolOutcome;
+  };
+}
+
+const routeOverrides = new WeakMap<ChatRequest, RouteDecision>();
 
 function workflowContext(request: ChatRequest): WorkflowContext {
   return {
@@ -82,7 +104,7 @@ async function submitIntegratedLogisticsUrge(request: ChatRequest) {
   return { requestNo: result.data.urgeRequestNo, sources: traceSources(result.meta.sources) };
 }
 
-async function submitIntegratedReturn(request: ChatRequest) {
+async function submitIntegratedReturn(request: ChatRequest, outcome?: InjectedToolOutcome) {
   const form = request.formData;
   if (!form) throw new Error("INVALID_INPUT: 缺少退换申请字段");
   const context = workflowContext(request);
@@ -101,12 +123,13 @@ async function submitIntegratedReturn(request: ChatRequest) {
   const result = await businessWorkflowService.submitReturnExchange(
     context,
     confirmedWrite(request, prepared.data, draft),
+    outcome ? { outcome } : undefined,
   );
   if (result.status !== "success") return toolFailure(result);
   return { requestNo: result.data.requestNo, sources: traceSources(result.meta.sources) };
 }
 
-async function submitIntegratedServiceTicket(request: ChatRequest) {
+async function submitIntegratedServiceTicket(request: ChatRequest, outcome?: InjectedToolOutcome) {
   const form = request.serviceFormData;
   if (!form) throw new Error("INVALID_INPUT: 缺少售后工单字段");
   const context = workflowContext(request);
@@ -125,6 +148,7 @@ async function submitIntegratedServiceTicket(request: ChatRequest) {
   const result = await businessWorkflowService.submitServiceTicket(
     context,
     confirmedWrite(request, prepared.data, draft),
+    outcome ? { outcome } : undefined,
   );
   if (result.status !== "success") return toolFailure(result);
   return { ticketNo: result.data.ticketNo, sources: traceSources(result.meta.sources) };
@@ -410,7 +434,7 @@ function createTrace(
     sessionId: request.sessionId,
     createdAt: new Date().toISOString(),
     intent,
-    route: buildRouteDecision(request, intent),
+    route: routeOverrides.get(request) ?? buildRouteDecision(request, intent),
     riskLevel,
     inputSummary: request.attachment
       ? `${request.message || "图片消息"}；附件=${request.attachment.name}`
@@ -420,7 +444,7 @@ function createTrace(
     totalDurationMs: detailedStages.reduce((total, stage) => total + stage.durationMs, 0),
     stages: detailedStages,
     sources,
-    debug: buildDebugContext(request, buildRouteDecision(request, intent), detailedStages),
+    debug: buildDebugContext(request, routeOverrides.get(request) ?? buildRouteDecision(request, intent), detailedStages),
   });
   return traceId;
 }
@@ -446,8 +470,12 @@ function toolStage(
   return { id, title, kind, status: "completed", durationMs, summary, toolCall: call };
 }
 
-export async function orchestrateMock(request: ChatRequest): Promise<ChatResponse> {
-  const intent = detectIntent(request.message, request);
+export async function orchestrateMock(
+  request: ChatRequest,
+  options: MockOrchestrationOptions = {},
+): Promise<ChatResponse> {
+  if (options.route) routeOverrides.set(request, options.route);
+  const intent = options.route?.intent ?? detectIntent(request.message, request);
 
   if (intent === "logistics_query" && request.action !== "confirm_identity") {
     if (request.action === "prepare_logistics_urge") {
@@ -560,6 +588,86 @@ export async function orchestrateMock(request: ChatRequest): Promise<ChatRespons
   }
 
   if (intent === "logistics_query") {
+    if (options.toolOutcomes?.latestOrder && options.toolOutcomes.latestOrder !== "success") {
+      const result = await omsMockAdapter.getLatestOrder(DEMO_CUSTOMER_ID, {
+        outcome: options.toolOutcomes.latestOrder,
+      });
+      const message = "当前账号下未找到可查询的订单，我不会返回其他账号或相似订单。";
+      return {
+        message,
+        intent,
+        riskLevel: "low",
+        traceId: createTrace(
+          request,
+          intent,
+          "low",
+          message,
+          ["确认演示身份", "查询 OMS 最近订单", "安全处理空结果"],
+          [],
+          [
+            decisionStage("identity", "确认查询权限", "用户已确认使用当前账号查询。", 12, "guardrail"),
+            toolStage("oms", "查询 OMS 最近订单", "OMS 返回确定性的空结果；未尝试匹配其他账号订单。", 20, {
+              system: "OMS",
+              toolName: "get_latest_order",
+              operation: "查询最近订单",
+              method: "GET",
+              endpoint: "/mock/oms/orders/latest",
+              input: { account_id: "current_user", limit: 1 },
+              output: { outcome: result.status, hit_count: 0 },
+              statusCode: 200,
+            }),
+            decisionStage("output", "返回空结果", "明确告知未找到，不猜测或泄露其他订单。", 8, "output"),
+          ],
+        ),
+      };
+    }
+
+    if (options.toolOutcomes?.shipment && options.toolOutcomes.shipment !== "success") {
+      const orderResult = await omsMockAdapter.getLatestOrder(DEMO_CUSTOMER_ID);
+      if (orderResult.status !== "success") return toolFailure(orderResult);
+      const shipmentResult = await tmsMockAdapter.getShipment(orderResult.data.orderId, {
+        outcome: options.toolOutcomes.shipment,
+      });
+      const message = "订单已找到，但物流接口暂时无法获取最新状态。请稍后重试，我不会猜测配送进度。";
+      return {
+        message,
+        intent,
+        riskLevel: "low",
+        traceId: createTrace(
+          request,
+          intent,
+          "low",
+          message,
+          ["确认演示身份", "查询 OMS 最近订单", "查询 TMS 物流超时", "返回安全重试提示"],
+          [],
+          [
+            decisionStage("identity", "确认查询权限", "用户已确认使用当前账号查询。", 12, "guardrail"),
+            toolStage("oms", "查询 OMS 最近订单", "OMS 返回当前账号最近订单。", 20, {
+              system: "OMS",
+              toolName: "get_latest_order",
+              operation: "查询最近订单",
+              method: "GET",
+              endpoint: "/mock/oms/orders/latest",
+              input: { account_id: "current_user", limit: 1 },
+              output: { outcome: orderResult.status, order_id: orderResult.data.orderId },
+              statusCode: 200,
+            }),
+            toolStage("tms", "查询 TMS 物流轨迹", "TMS 返回确定性的超时结果；未生成虚构物流状态。", 20, {
+              system: "TMS",
+              toolName: "get_shipment_timeline",
+              operation: "查询物流轨迹",
+              method: "GET",
+              endpoint: "/mock/tms/shipments/{order_id}",
+              input: { order_id: orderResult.data.orderId },
+              output: { outcome: shipmentResult.status, retryable: shipmentResult.status !== "success" && shipmentResult.error.retryable },
+              statusCode: 504,
+            }),
+            decisionStage("output", "返回安全重试提示", "说明暂时无法获取，不猜测物流状态。", 8, "output"),
+          ],
+        ),
+      };
+    }
+
     const order = await getLatestOrder();
     const message = "已找到最近一笔灯具订单，目前正在运输中。";
     return {
@@ -709,7 +817,40 @@ export async function orchestrateMock(request: ChatRequest): Promise<ChatRespons
 
   if (intent === "return_exchange" && request.action === "submit_return") {
     const serviceType = request.formData?.serviceType ?? "退换货";
-    const returnRequest = await submitIntegratedReturn(request);
+    let returnRequest: Awaited<ReturnType<typeof submitIntegratedReturn>>;
+    try {
+      returnRequest = await submitIntegratedReturn(request, options.toolOutcomes?.returnExchange);
+    } catch (error) {
+      if (!options.toolOutcomes?.returnExchange || options.toolOutcomes.returnExchange === "success") throw error;
+      const message = `${serviceType}申请提交失败：当前业务状态不允许该操作。申请未创建，如需继续处理请联系人工客服。`;
+      return {
+        message,
+        intent,
+        riskLevel: "medium",
+        traceId: createTrace(
+          request,
+          intent,
+          "medium",
+          message,
+          ["校验用户确认", `提交${serviceType}申请`, "返回明确失败"],
+          [],
+          [
+            decisionStage("confirm", "校验用户确认与必填项", `用户已确认提交${serviceType}，允许执行一次写工具。`, 18, "guardrail"),
+            toolStage("crm", `创建${serviceType}申请单`, "CRM 按注入场景返回业务拒绝，写入未发生。", 20, {
+              system: "CRM",
+              toolName: "create_return_request",
+              operation: `创建${serviceType}申请`,
+              method: "POST",
+              endpoint: "/mock/crm/return-requests",
+              input: { user_confirmed: true },
+              output: { outcome: options.toolOutcomes.returnExchange, created: false },
+              statusCode: 409,
+            }),
+            decisionStage("output", "返回失败结果", "明确说明未创建申请，不伪造申请编号。", 8, "output"),
+          ],
+        ),
+      };
+    }
     const message = `${serviceType}申请已提交，后续进展会通过当前账号消息通知你。`;
     return {
       message,
@@ -823,6 +964,61 @@ export async function orchestrateMock(request: ChatRequest): Promise<ChatRespons
   }
 
   if (intent === "knowledge_query") {
+    const sandboxScenario = knowledgeSandbox.getActive();
+    if (sandboxScenario) {
+      const retrieval = await retrieveKnowledgeByQuery(request.message);
+      const conflict = retrieval.status === "conflict";
+      const expired = retrieval.status === "expired";
+      if (conflict || expired) {
+        if (conflict) {
+          routeOverrides.set(request, {
+            ...(options.route ?? buildRouteDecision(request, intent)),
+            requiresHuman: true,
+          });
+        }
+        const message = conflict
+          ? "检索到的已发布知识存在冲突，我不会自动选边或给出业务结论，已建议转人工确认。"
+          : "检索到的换新政策已经过期，不能用于当前处理；我不会引用过期内容，请由人工确认现行政策。";
+        return {
+          message,
+          intent,
+          riskLevel: "medium",
+          traceId: createTrace(
+            request,
+            intent,
+            "medium",
+            message,
+            ["识别知识主题", "执行确定性知识检索", conflict ? "识别知识冲突" : "过滤过期知识", "进入人工确认兜底"],
+            [],
+            [
+              decisionStage("route", "识别隐藏知识路由", "路由到 knowledge_query，并启用隔离的固定评测知识场景。", 12),
+              toolStage("knowledge", "检索已发布客服知识", conflict ? "检索器返回冲突，不采用任何候选。" : "检索器过滤过期条目，不采用任何候选。", 20, {
+                system: "CustomerKnowledgeBase",
+                toolName: "search_published_knowledge",
+                operation: "检索客服知识",
+                method: "POST",
+                endpoint: "/mock/knowledge/search",
+                input: { query: request.message, scenario: sandboxScenario },
+                output: {
+                  retrieval_status: retrieval.status,
+                  selected_article_ids: retrieval.selectedArticleIds,
+                  conflict_count: retrieval.conflicts.length,
+                },
+                statusCode: conflict ? 409 : 200,
+              }, "knowledge"),
+              decisionStage("output", conflict ? "执行冲突兜底" : "执行过期知识兜底", "不采用任何候选知识，不生成未经确认的结论。", 8, "output"),
+            ],
+          ),
+          ui: {
+            kind: "knowledge_answer",
+            title: conflict ? "知识冲突，需人工确认" : "政策已过期",
+            items: conflict ? ["未自动选择任何冲突条目", "未给出业务承诺", "请由人工确认适用规则"] : ["过期内容未被采用", "未生成换新结论", "请由人工确认现行政策"],
+            footer: "当前回复未引用冲突或过期知识作为结论",
+          },
+        };
+      }
+    }
+
     const isWarranty = /质保|保修|收费|过保|换新政策|配件购买|售后流程|怎么售后/.test(request.message);
     const isInstallationGuide = /安装视频|安装方法|怎么安装|拆卸|怎么拆|接线/.test(request.message);
     const isConsumerBusiness = /门店|购买渠道|哪里买|验真|真伪|客服电话|企业资质|公司介绍/.test(request.message);
@@ -1077,9 +1273,42 @@ export async function orchestrateMock(request: ChatRequest): Promise<ChatRespons
   }
 
   if (intent === "service_ticket_create" && request.action === "submit_service_ticket") {
-    const ticket = await submitIntegratedServiceTicket(request);
     const isInstallation = request.serviceFormData?.serviceType === "安装服务";
     const serviceLabel = isInstallation ? "安装服务" : "售后报修";
+    let ticket: Awaited<ReturnType<typeof submitIntegratedServiceTicket>>;
+    try {
+      ticket = await submitIntegratedServiceTicket(request, options.toolOutcomes?.serviceTicket);
+    } catch (error) {
+      if (!options.toolOutcomes?.serviceTicket || options.toolOutcomes.serviceTicket === "success") throw error;
+      const message = `${serviceLabel}提交失败，服务系统暂时不可用。工单未创建，请稍后安全重试；如问题紧急可转人工客服。`;
+      return {
+        message,
+        intent,
+        riskLevel: "medium",
+        traceId: createTrace(
+          request,
+          intent,
+          "medium",
+          message,
+          ["校验用户确认", `提交${serviceLabel}`, "返回安全重试提示"],
+          [],
+          [
+            decisionStage("confirm", "校验用户确认与服务字段", `用户已确认提交${serviceLabel}，允许执行一次写工具。`, 18, "guardrail"),
+            toolStage("crm", `创建 CRM ${serviceLabel}工单`, "CRM 按注入场景返回系统失败，写入未发生。", 20, {
+              system: "CRM",
+              toolName: "create_service_ticket",
+              operation: `创建${serviceLabel}工单`,
+              method: "POST",
+              endpoint: "/mock/crm/service-tickets",
+              input: { user_confirmed: true },
+              output: { outcome: options.toolOutcomes.serviceTicket, created: false, retryable: true },
+              statusCode: 503,
+            }),
+            decisionStage("output", "返回安全重试提示", "明确说明工单未创建，允许用户稍后重试。", 8, "output"),
+          ],
+        ),
+      };
+    }
     const message = `${serviceLabel}已提交，服务人员会按你填写的联系方式和时段进行预约。具体时间以人工确认结果为准。`;
     return {
       message,

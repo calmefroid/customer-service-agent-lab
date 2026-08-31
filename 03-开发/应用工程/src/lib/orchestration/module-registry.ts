@@ -1,4 +1,5 @@
-import type { AgentEvent, ChatRequest, ChatResponse } from "@/lib/contracts";
+import type { AgentEvent, ChatRequest, ChatResponse, RouteDecision } from "@/lib/contracts";
+import type { ImageObservation } from "@/lib/sessions";
 
 export const ORCHESTRATION_PHASES = [
   "router",
@@ -12,6 +13,8 @@ export type OrchestrationPhase = (typeof ORCHESTRATION_PHASES)[number];
 
 export interface OrchestrationContext {
   request: ChatRequest;
+  route?: RouteDecision;
+  observation?: ImageObservation;
   signal?: AbortSignal;
   emit: (event: AgentEvent) => void;
 }
@@ -49,7 +52,12 @@ export class ModuleRegistry {
 
   async execute(
     request: ChatRequest,
-    options: { signal?: AbortSignal; emit?: (event: AgentEvent) => void } = {},
+    options: {
+      route?: RouteDecision;
+      observation?: ImageObservation;
+      signal?: AbortSignal;
+      emit?: (event: AgentEvent) => void;
+    } = {},
   ): Promise<ChatResponse> {
     const module = this.resolve(request);
     if (!module) {
@@ -57,6 +65,8 @@ export class ModuleRegistry {
     }
     return module.execute({
       request,
+      route: options.route,
+      observation: options.observation,
       signal: options.signal,
       emit: options.emit ?? (() => undefined),
     });

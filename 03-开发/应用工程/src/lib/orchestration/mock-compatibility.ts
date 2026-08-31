@@ -1,6 +1,7 @@
 import type { OrchestrationModule } from "@/lib/orchestration/module-registry";
 import { agentModuleRegistry } from "@/lib/orchestration/module-registry";
 import { orchestrateMock } from "@/lib/mock-orchestrator";
+import type { RuntimeWorkflowContext } from "@/lib/agent-runtime/types";
 
 const legacyMockModule: OrchestrationModule = {
   id: "legacy-mock-orchestrator",
@@ -9,11 +10,18 @@ const legacyMockModule: OrchestrationModule = {
   priority: -100,
   phases: ["router", "guardrail", "workflow", "tool_or_rag", "output"],
   supports: () => true,
-  execute: ({ request }) => orchestrateMock(request),
+  execute: ({ request, route }) => orchestrateMock(request, { route }),
 };
 
 agentModuleRegistry.register(legacyMockModule);
 
-export async function runRegisteredAgent(request: Parameters<typeof orchestrateMock>[0]) {
-  return agentModuleRegistry.execute(request);
+export async function runRegisteredAgent(
+  request: Parameters<typeof orchestrateMock>[0],
+  runtimeContext?: RuntimeWorkflowContext,
+) {
+  return agentModuleRegistry.execute(request, {
+    route: runtimeContext?.route,
+    observation: runtimeContext?.observation,
+    signal: runtimeContext?.signal,
+  });
 }

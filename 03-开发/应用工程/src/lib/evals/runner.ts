@@ -1,5 +1,11 @@
+import { AgentRuntime } from "@/lib/agent-runtime/agent-runtime";
+import { InMemoryRuntimeTraceStore } from "@/lib/agent-runtime/runtime-trace-store";
+import { knowledgeSandbox } from "@/lib/adapters/knowledge-mock-adapter";
 import { deactivateKnowledgeArticle, resetKnowledgeStore } from "@/lib/knowledge-store";
-import { orchestrateMock } from "@/lib/mock-orchestrator";
+import { MockMultimodalModelAdapter, MockTextModelAdapter } from "@/lib/models";
+import { orchestrateMock, type MockOrchestrationOptions } from "@/lib/mock-orchestrator";
+import { runRegisteredAgent } from "@/lib/orchestration/mock-compatibility";
+import { InMemorySessionStore } from "@/lib/sessions";
 import { listTraces } from "@/lib/trace-store";
 import { EVAL_CASES, EVAL_MOCK_VERSION, EVAL_SUITE_VERSION, getEvalCase } from "@/lib/evals/dataset";
 import { gradeEvalCase } from "@/lib/evals/graders";
@@ -28,26 +34,81 @@ function store(): EvalRun[] {
 
 function setupScenario(evalCase: EvalCase): void {
   resetKnowledgeStore();
+  knowledgeSandbox.clear();
   if (evalCase.input.scenario === "knowledge_no_hit_installation") {
     deactivateKnowledgeArticle("KB-INSTALL-GUIDE-007");
   }
   if (evalCase.input.scenario === "knowledge_no_hit_warranty") {
     deactivateKnowledgeArticle("KB-AFTERSALE-WARRANTY-003");
   }
+  if (evalCase.input.scenario === "knowledge_conflict" || evalCase.input.scenario === "knowledge_expired") {
+    knowledgeSandbox.activate(evalCase.input.scenario);
+  }
 }
 
 function inferSemanticOutcome(trace: EvalActual["trace"]): EvalActual["simulatedOutcome"] {
   const outputs = trace?.stages.flatMap((stage) => stage.toolCall ? [stage.toolCall.output] : []) ?? [];
+  if (outputs.some((output) => output.retrieval_status === "conflict" || output.outcome === "business_error")) return "business_error";
+  if (outputs.some((output) => output.retrieval_status === "expired" || output.outcome === "empty")) return "empty";
+  if (outputs.some((output) => output.outcome === "timeout")) return "timeout";
+  if (outputs.some((output) => output.outcome === "system_error")) return "system_error";
   if (outputs.some((output) => output.hit_count === 0)) return "empty";
   return undefined;
+}
+
+function orchestrationOptions(evalCase: EvalCase): MockOrchestrationOptions {
+  switch (evalCase.input.scenario) {
+    case "tool_empty":
+      return { toolOutcomes: { latestOrder: "empty" } };
+    case "tool_timeout":
+      return { toolOutcomes: { shipment: "timeout" } };
+    case "tool_business_error":
+      return { toolOutcomes: { returnExchange: "business_error" } };
+    case "tool_system_error":
+      return { toolOutcomes: { serviceTicket: "system_error" } };
+    default:
+      return {};
+  }
+}
+
+async function executeImageEval(evalCase: EvalCase, sessionId: string) {
+  const runtimeTraces = new InMemoryRuntimeTraceStore();
+  const runtime = new AgentRuntime({
+    textModel: new MockTextModelAdapter(),
+    multimodalModel: new MockMultimodalModelAdapter(),
+    workflow: {
+      execute: (request, context) => runRegisteredAgent(request, context),
+    },
+    sessions: new InMemorySessionStore(),
+    traceSink: runtimeTraces,
+  });
+  let response: EvalActual["response"] = null;
+  let publicError: string | undefined;
+  for await (const event of runtime.run({ ...evalCase.input.request, sessionId })) {
+    if (event.type === "final") response = event.response;
+    if (event.type === "error") publicError = `${event.error.code}: ${event.error.message}`;
+  }
+  if (!response) throw new Error(publicError ?? "RUNTIME_FINAL_RESPONSE_MISSING");
+  const route = runtimeTraces
+    .list(response.traceId)
+    .filter((event) => event.type === "route" && event.payload.selected)
+    .at(-1);
+  return {
+    response,
+    route: route?.type === "route" ? route.payload.selected : undefined,
+  };
 }
 
 export const executeMockEval: EvalExecutor = async (evalCase, sessionId) => {
   setupScenario(evalCase);
   const startedAt = Date.now();
   try {
-    const response = await orchestrateMock({ ...evalCase.input.request, sessionId });
-    const trace = listTraces(sessionId).find((item) => item.traceId === response.traceId) ?? null;
+    const runtimeResult = evalCase.category === "image"
+      ? await executeImageEval(evalCase, sessionId)
+      : undefined;
+    const response = runtimeResult?.response
+      ?? await orchestrateMock({ ...evalCase.input.request, sessionId }, orchestrationOptions(evalCase));
+    const trace = listTraces(sessionId).at(-1) ?? null;
     const toolCalls = trace?.stages.flatMap((stage) => stage.toolCall ? [{
       system: stage.toolCall.system,
       toolName: stage.toolCall.toolName,
@@ -56,6 +117,7 @@ export const executeMockEval: EvalExecutor = async (evalCase, sessionId) => {
     }] : []) ?? [];
     return {
       response,
+      route: runtimeResult?.route,
       trace,
       toolCalls,
       sourceSystems: [...new Set(trace?.sources.map((source) => source.sourceSystem) ?? [])],
@@ -64,6 +126,7 @@ export const executeMockEval: EvalExecutor = async (evalCase, sessionId) => {
       simulatedOutcome: inferSemanticOutcome(trace),
     };
   } finally {
+    knowledgeSandbox.clear();
     resetKnowledgeStore();
   }
 };

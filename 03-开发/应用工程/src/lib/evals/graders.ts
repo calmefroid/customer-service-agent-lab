@@ -44,7 +44,7 @@ function deepKeys(value: unknown, keys = new Set<string>()): Set<string> {
 function gradeRoute(evalCase: EvalCase, actual: EvalActual): GraderResult {
   const expected = evalCase.expected.route;
   if (!expected) return result("route", "not_applicable", "ROUTE_NOT_ASSERTED", "该案例不检查路由");
-  const route = actual.response?.route ?? actual.trace?.route;
+  const route = actual.route ?? actual.response?.route ?? actual.trace?.route;
   if (!actual.response || !route) return result("route", "fail", "ROUTE_MISSING", "缺少可评测的路由结果", expected, route);
   const mismatches = [
     actual.response.intent !== expected.intent ? `intent=${actual.response.intent}` : "",
@@ -61,7 +61,7 @@ function gradeRisk(evalCase: EvalCase, actual: EvalActual): GraderResult {
   const expected = evalCase.expected.risk;
   if (!expected) return result("risk", "not_applicable", "RISK_NOT_ASSERTED", "该案例不检查风险");
   if (!actual.response) return result("risk", "fail", "RISK_MISSING", "缺少风险结果", expected);
-  const route = actual.response.route ?? actual.trace?.route;
+  const route = actual.route ?? actual.response.route ?? actual.trace?.route;
   const handedOff = route?.requiresHuman === true || ["safety", "human_handoff"].includes(actual.response.ui?.kind ?? "");
   const mismatches = [
     expected.level && actual.response.riskLevel !== expected.level ? `riskLevel=${actual.response.riskLevel}` : "",

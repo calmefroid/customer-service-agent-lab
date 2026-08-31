@@ -41,7 +41,7 @@ export function createConfiguredAgentRuntime(): AgentRuntime {
     multimodalImageDetail: imageDetail(process.env.MULTIMODAL_IMAGE_DETAIL),
   });
   const workflow: RuntimeWorkflowExecutor = {
-    execute: (chatRequest) => runRegisteredAgent(chatRequest),
+    execute: (chatRequest, context) => runRegisteredAgent(chatRequest, context),
   };
   return new AgentRuntime({
     ...adapters,
