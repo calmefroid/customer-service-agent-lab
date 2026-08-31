@@ -31,4 +31,5 @@ export interface AgentRuntimeDependencies {
 
 export interface RuntimeRunOptions {
   signal?: AbortSignal;
+  traceId?: string;
 }

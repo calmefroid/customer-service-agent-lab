@@ -1,9 +1,15 @@
 import { runRegisteredAgent } from "@/lib/orchestration/mock-compatibility";
 import { createDefaultModelAdapters, type ModelMode } from "@/lib/models";
+import type { SessionStore } from "@/lib/sessions";
 
 import { AgentRuntime } from "./agent-runtime";
 import { defaultRuntimeSessions, defaultRuntimeTraceStore } from "./runtime-singletons";
-import type { RuntimeWorkflowExecutor } from "./types";
+import type { RuntimeTraceSink, RuntimeWorkflowExecutor } from "./types";
+
+export interface ConfiguredAgentRuntimeOptions {
+  sessions?: SessionStore;
+  traceSink?: RuntimeTraceSink;
+}
 
 function modelMode(value: string | undefined, fallback: ModelMode): ModelMode {
   return value === "live" ? "live" : value === "mock" ? "mock" : fallback;
@@ -19,7 +25,7 @@ function imageDetail(value: string | undefined): "low" | "high" | "auto" | undef
   return value === "low" || value === "high" || value === "auto" ? value : undefined;
 }
 
-export function createConfiguredAgentRuntime(): AgentRuntime {
+export function createConfiguredAgentRuntime(options: ConfiguredAgentRuntimeOptions = {}): AgentRuntime {
   const defaultMode = modelMode(process.env.MODEL_MODE, "mock");
   const unifiedModel = process.env.UNIFIED_MODEL_MODE === "true";
   const textBaseUrl = process.env.TEXT_MODEL_BASE_URL;
@@ -46,8 +52,8 @@ export function createConfiguredAgentRuntime(): AgentRuntime {
   return new AgentRuntime({
     ...adapters,
     workflow,
-    sessions: defaultRuntimeSessions,
-    traceSink: defaultRuntimeTraceStore,
+    sessions: options.sessions ?? defaultRuntimeSessions,
+    traceSink: options.traceSink ?? defaultRuntimeTraceStore,
     modelTimeoutMs: positiveInteger(process.env.MODEL_TIMEOUT_MS),
   });
 }
