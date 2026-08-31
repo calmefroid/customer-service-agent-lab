@@ -1,5 +1,9 @@
 import type { KnowledgeTopic } from "@/lib/contracts";
 import { retrieveFromKnowledgeIndex } from "@/lib/rag/deterministic-retriever";
+import {
+  retrieveKnowledgeSandboxScenario,
+  type KnowledgeSandboxScenario,
+} from "@/lib/rag/sandbox-scenarios";
 import type {
   KnowledgeIndexArticle,
   KnowledgeManagedArticle,
@@ -27,6 +31,8 @@ declare global {
   var customerServiceKnowledgeStore: StoredKnowledgeArticle[] | undefined;
   // eslint-disable-next-line no-var
   var customerServiceKnowledgeDraftSequence: number | undefined;
+  // eslint-disable-next-line no-var
+  var customerServiceKnowledgeSandboxScenario: KnowledgeSandboxScenario | undefined;
 }
 
 const DEFAULT_EFFECTIVE_FROM = "2026-01-01T00:00:00+08:00";
@@ -306,6 +312,7 @@ export function deactivateKnowledgeArticle(id: string): KnowledgeManagedArticle 
 
 /** Compatibility helper for the current orchestrator. New integrations should use retrievePublishedKnowledge. */
 export function getPublishedKnowledgeByTopic(topic: KnowledgeTopic, effectiveAt = new Date().toISOString()): KnowledgeManagedArticle | undefined {
+  if (globalThis.customerServiceKnowledgeSandboxScenario) return undefined;
   const article = store()
     .filter((item) => item.status === "published" && item.publishedSnapshot?.topic === topic)
     .filter((item) => {
@@ -331,12 +338,27 @@ export function getPublishedKnowledgeByTopic(topic: KnowledgeTopic, effectiveAt 
 }
 
 export function retrievePublishedKnowledge(query: string, filters?: KnowledgeSearchFilters): KnowledgePreviewResponse {
+  const scenario = globalThis.customerServiceKnowledgeSandboxScenario;
+  if (scenario) return retrieveKnowledgeSandboxScenario(scenario, query, filters);
   return retrieveFromKnowledgeIndex({
     articles: store().map(toPublishedIndex).filter((article): article is KnowledgeIndexArticle => Boolean(article)),
     query,
     filters,
     mode: "published",
   });
+}
+
+/** Explicitly enables one isolated bad-case fixture. Default retrieval never enables this itself. */
+export function activateKnowledgeSandboxScenario(scenario: KnowledgeSandboxScenario): void {
+  globalThis.customerServiceKnowledgeSandboxScenario = scenario;
+}
+
+export function clearKnowledgeSandboxScenario(): void {
+  globalThis.customerServiceKnowledgeSandboxScenario = undefined;
+}
+
+export function getActiveKnowledgeSandboxScenario(): KnowledgeSandboxScenario | undefined {
+  return globalThis.customerServiceKnowledgeSandboxScenario;
 }
 
 export function previewKnowledge(query: string, selectedArticleId?: string, filters?: KnowledgeSearchFilters): KnowledgePreviewResponse {
@@ -352,4 +374,5 @@ export function previewKnowledge(query: string, selectedArticleId?: string, filt
 export function resetKnowledgeStore(): void {
   globalThis.customerServiceKnowledgeStore = createSeedStore();
   globalThis.customerServiceKnowledgeDraftSequence = 0;
+  clearKnowledgeSandboxScenario();
 }
