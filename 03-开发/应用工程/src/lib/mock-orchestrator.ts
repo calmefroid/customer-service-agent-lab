@@ -12,6 +12,7 @@ import { tmsMockAdapter } from "@/lib/adapters/tms-mock-adapter";
 import type {
   ChatRequest,
   ChatResponse,
+  ConfirmationDecision,
   ConfirmationRequest,
   DataSourceMetadata,
   Intent,
@@ -31,7 +32,7 @@ import type {
 import type { AdapterCallOptions } from "@/lib/domain/business";
 import { businessWorkflowService } from "@/lib/domain/business-workflow";
 import { DEMO_CUSTOMER_ID } from "@/lib/mock-data/business-fixtures";
-import { appendTrace } from "@/lib/trace-store";
+import { appendTrace, createTraceWriter } from "@/lib/trace-store";
 
 const safetyPattern = /冒烟|烧焦|触电|火花|异常发热|明显过热|漏电|起火/;
 const requestedHumanPattern = /转人工|人工客服|找客服|真人客服|人工处理/;
@@ -53,12 +54,31 @@ export interface MockOrchestrationOptions {
 const routeOverrides = new WeakMap<ChatRequest, RouteDecision>();
 const traceIdOverrides = new WeakMap<ChatRequest, string>();
 
+function requiredTraceId(request: ChatRequest): string {
+  const traceId = traceIdOverrides.get(request);
+  if (!traceId) throw new Error("TRACE_ID_NOT_INITIALIZED");
+  return traceId;
+}
+
 function workflowContext(request: ChatRequest): WorkflowContext {
   return {
     sessionId: request.sessionId,
-    traceId: traceIdOverrides.get(request) ?? `pending:${request.sessionId}`,
+    traceId: requiredTraceId(request),
     identity: { customerId: DEMO_CUSTOMER_ID, verified: true },
   };
+}
+
+function appendConfirmationTrace<TDraft extends Record<string, unknown>>(
+  request: ChatRequest,
+  confirmation: ConfirmationRequest<TDraft>,
+  status: "started" | "completed" | "failed",
+  decision?: ConfirmationDecision<TDraft>,
+): void {
+  createTraceWriter(requiredTraceId(request), request.sessionId).append({
+    type: "confirmation",
+    status,
+    payload: { request: confirmation, ...(decision ? { decision } : {}) },
+  });
 }
 
 function confirmedWrite<TDraft extends Record<string, unknown>>(
@@ -98,11 +118,22 @@ async function submitIntegratedLogisticsUrge(request: ChatRequest) {
   };
   const prepared = await businessWorkflowService.prepareLogisticsUrge(context, draft);
   if (prepared.status !== "success") return toolFailure(prepared);
+  const write = confirmedWrite(request, prepared.data, draft);
+  appendConfirmationTrace(request, write.request, "started");
   const result = await businessWorkflowService.submitLogisticsUrge(
     context,
-    confirmedWrite(request, prepared.data, draft),
+    write,
   );
-  if (result.status !== "success") return toolFailure(result);
+  if (result.status !== "success") {
+    appendConfirmationTrace(request, write.request, "failed");
+    return toolFailure(result);
+  }
+  appendConfirmationTrace(request, write.request, "completed", {
+    confirmationRequestId: write.request.confirmationRequestId,
+    action: "confirm",
+    finalSnapshot: draft,
+    decidedAt: new Date().toISOString(),
+  });
   return { requestNo: result.data.urgeRequestNo, sources: traceSources(result.meta.sources) };
 }
 
@@ -122,12 +153,23 @@ async function submitIntegratedReturn(request: ChatRequest, outcome?: InjectedTo
   };
   const prepared = await businessWorkflowService.prepareReturnExchange(context, draft);
   if (prepared.status !== "success") return toolFailure(prepared);
+  const write = confirmedWrite(request, prepared.data, draft);
+  appendConfirmationTrace(request, write.request, "started");
   const result = await businessWorkflowService.submitReturnExchange(
     context,
-    confirmedWrite(request, prepared.data, draft),
+    write,
     outcome ? { outcome } : undefined,
   );
-  if (result.status !== "success") return toolFailure(result);
+  if (result.status !== "success") {
+    appendConfirmationTrace(request, write.request, "failed");
+    return toolFailure(result);
+  }
+  appendConfirmationTrace(request, write.request, "completed", {
+    confirmationRequestId: write.request.confirmationRequestId,
+    action: "confirm",
+    finalSnapshot: draft,
+    decidedAt: new Date().toISOString(),
+  });
   return { requestNo: result.data.requestNo, sources: traceSources(result.meta.sources) };
 }
 
@@ -147,12 +189,23 @@ async function submitIntegratedServiceTicket(request: ChatRequest, outcome?: Inj
   };
   const prepared = await businessWorkflowService.prepareServiceTicket(context, draft);
   if (prepared.status !== "success") return toolFailure(prepared);
+  const write = confirmedWrite(request, prepared.data, draft);
+  appendConfirmationTrace(request, write.request, "started");
   const result = await businessWorkflowService.submitServiceTicket(
     context,
-    confirmedWrite(request, prepared.data, draft),
+    write,
     outcome ? { outcome } : undefined,
   );
-  if (result.status !== "success") return toolFailure(result);
+  if (result.status !== "success") {
+    appendConfirmationTrace(request, write.request, "failed");
+    return toolFailure(result);
+  }
+  appendConfirmationTrace(request, write.request, "completed", {
+    confirmationRequestId: write.request.confirmationRequestId,
+    action: "confirm",
+    finalSnapshot: draft,
+    decidedAt: new Date().toISOString(),
+  });
   return { ticketNo: result.data.ticketNo, sources: traceSources(result.meta.sources) };
 }
 
@@ -422,8 +475,7 @@ function createTrace(
   sources: TraceSource[],
   stages?: TraceStage[],
 ): string {
-  const traceId = traceIdOverrides.get(request) ?? `TR-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  traceIdOverrides.set(request, traceId);
+  const traceId = requiredTraceId(request);
   const detailedStages = stages ?? steps.map((step, index) => ({
     id: `step-${index + 1}`,
     title: step,

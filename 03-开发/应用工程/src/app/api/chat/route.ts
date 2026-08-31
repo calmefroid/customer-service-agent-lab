@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { validateAttachment } from "@/lib/agent-runtime/attachment-validation";
 import { createConfiguredAgentRuntime } from "@/lib/agent-runtime/configured-runtime";
 import type { AgentPublicError, ChatRequest, ChatResponse } from "@/lib/contracts";
+import { unifiedTraceSink } from "@/lib/trace-store";
 
 export const runtime = "nodejs";
 
@@ -51,7 +52,7 @@ export async function POST(request: Request) {
     }
   }
 
-  const agent = createConfiguredAgentRuntime();
+  const agent = createConfiguredAgentRuntime({ traceSink: unifiedTraceSink });
   let finalResponse: ChatResponse | undefined;
   let publicError: AgentPublicError | undefined;
   for await (const event of agent.run(body as ChatRequest, { signal: request.signal })) {

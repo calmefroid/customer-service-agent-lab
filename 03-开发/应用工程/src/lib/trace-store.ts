@@ -80,7 +80,7 @@ function redactString(value: string, key: string): string {
 
 function sanitizeUnknown(value: unknown, key = ""): unknown {
   if (/data.?url|base64|image.?data/i.test(key)) return undefined;
-  if (/api.?key|authorization|secret|access.?token|refresh.?token/i.test(key)) return "***";
+  if (/api.?key|authorization|secret|access.?token|refresh.?token|confirmation.?token|idempotency.?key/i.test(key)) return "***";
   if (/chain.?of.?thought|private.?reasoning|hidden.?reasoning|thinking/i.test(key)) return "[OMITTED]";
   if (/(?:phone|mobile)$/i.test(key)) {
     return typeof value === "string" && value.includes("*") ? value : "[REDACTED_PHONE]";
@@ -123,9 +123,15 @@ function hasEvent(traceId: string, type: TraceEventType): boolean {
 export function appendTraceEvent(event: TraceEvent): TraceEvent {
   const sanitized = sanitizeEvent(event);
   const events = eventStore();
-  if (!events.some((candidate) => candidate.eventId === sanitized.eventId)) events.push(sanitized);
+  const existing = events.find((candidate) => candidate.eventId === sanitized.eventId);
+  if (existing) return existing;
+  const sequence = events
+    .filter((candidate) => candidate.traceId === sanitized.traceId)
+    .reduce((highest, candidate) => Math.max(highest, candidate.sequence), 0) + 1;
+  const normalized = { ...sanitized, sequence } as TraceEvent;
+  events.push(normalized);
   if (events.length > 5_000) events.splice(0, events.length - 5_000);
-  return sanitized;
+  return normalized;
 }
 
 /** Structural RuntimeTraceSink used by the 00 Chat API assembly after 01 exposes injection. */

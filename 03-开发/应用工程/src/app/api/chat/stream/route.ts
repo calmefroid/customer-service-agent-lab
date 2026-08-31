@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { validateAttachment } from "@/lib/agent-runtime/attachment-validation";
 import { createConfiguredAgentRuntime } from "@/lib/agent-runtime/configured-runtime";
 import type { AgentEvent, ChatRequest } from "@/lib/contracts";
+import { unifiedTraceSink } from "@/lib/trace-store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -41,7 +42,7 @@ export async function POST(request: Request) {
   const validationError = validateChatRequest(body);
   if (validationError) return invalidRequest(validationError);
 
-  const agent = createConfiguredAgentRuntime();
+  const agent = createConfiguredAgentRuntime({ traceSink: unifiedTraceSink });
   const chatRequest = body as ChatRequest;
 
   const stream = new ReadableStream<Uint8Array>({

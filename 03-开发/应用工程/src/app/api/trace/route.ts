@@ -26,6 +26,9 @@ export async function GET(request: Request) {
   if ((from && !Number.isFinite(Date.parse(from))) || (to && !Number.isFinite(Date.parse(to)))) {
     return NextResponse.json({ error: "INVALID_TRACE_TIME_RANGE" }, { status: 400 });
   }
+  if (from && to && Date.parse(from) > Date.parse(to)) {
+    return NextResponse.json({ error: "INVALID_TRACE_TIME_RANGE" }, { status: 400 });
+  }
   const query: TraceEventQuery = {
     traceId: searchParams.get("traceId") ?? undefined,
     sessionId: searchParams.get("sessionId") ?? undefined,

@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { GET } from "@/app/api/trace/route";
+import { DELETE, GET } from "@/app/api/trace/route";
 import { POST as streamChat } from "@/app/api/chat/stream/route";
+import { defaultRuntimeTraceStore } from "@/lib/agent-runtime/runtime-singletons";
 import { PUBLIC_CONTRACT_VERSION, type AgentEvent, type TraceEvent } from "@/lib/contracts";
 import {
   appendTraceEvent,
@@ -53,7 +54,14 @@ describe("unified TraceEvent architecture", () => {
     expect(traceEvents.map((event) => event.type)).toEqual(expect.arrayContaining(["model", "route", "tool", "output"]));
     expect(traceEvents.map((event) => event.sequence)).toEqual(traceEvents.map((_, index) => index + 1));
     expect(listTraces("S-unified")[0].traceId).toBe(traceId);
+    expect(defaultRuntimeTraceStore.list(traceId)).toHaveLength(0);
     expect(listTraceViews({ traceId })).toHaveLength(1);
+    const traceResponse = await GET(new Request(`http://localhost/api/trace?traceId=${encodeURIComponent(traceId)}`));
+    const traceBody = await traceResponse.json() as { records: Array<{ traceId: string; events: TraceEvent[] }>; events: TraceEvent[] };
+    expect(traceBody.records).toHaveLength(1);
+    expect(traceBody.records[0].traceId).toBe(traceId);
+    expect(traceBody.records[0].events.map((event) => event.type)).toEqual(expect.arrayContaining(["model", "route", "rule", "tool", "output"]));
+    expect(new Set(traceBody.events.map((event) => event.traceId))).toEqual(new Set([traceId]));
     expect(final.response).not.toHaveProperty("debug");
     expect(final.response).not.toHaveProperty("route");
   });
@@ -83,6 +91,31 @@ describe("unified TraceEvent architecture", () => {
     const body = await apiResponse.json() as { events: TraceEvent[] };
     expect(body.events.map((event) => event.eventId)).toEqual(["TE-query-error"]);
     expect((await GET(new Request("http://localhost/api/trace?type=unknown"))).status).toBe(400);
+    expect((await GET(new Request("http://localhost/api/trace?from=2026-08-31T09:00:00.000Z&to=2026-08-31T08:00:00.000Z"))).status).toBe(400);
+  });
+
+  it("records confirmed business writes on the Runtime trace and clears every trace store", async () => {
+    const response = await streamChat(new Request("http://localhost/api/chat/stream", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sessionId: "S-confirmation-trace", message: "确认催物流", action: "submit_logistics_urge" }),
+    }));
+    const final = parseAgentEvents(await response.text()).find((event) => event.type === "final");
+    if (final?.type !== "final") throw new Error("FINAL_EVENT_MISSING");
+
+    const traceEvents = listTraceEvents({ traceId: final.response.traceId });
+    const confirmations = traceEvents.filter(
+      (event): event is Extract<TraceEvent, { type: "confirmation" }> => event.type === "confirmation",
+    );
+    expect(confirmations.map((event) => event.status)).toEqual(["started", "completed"]);
+    expect(confirmations.every((event) => event.traceId === final.response.traceId)).toBe(true);
+    expect(confirmations.every((event) => event.payload.request.confirmationToken === "***")).toBe(true);
+    expect(confirmations.every((event) => event.payload.request.idempotencyKey === "***")).toBe(true);
+
+    expect((await DELETE()).status).toBe(200);
+    expect(listTraceEvents()).toHaveLength(0);
+    expect(listTraces()).toHaveLength(0);
+    expect(defaultRuntimeTraceStore.list()).toHaveLength(0);
   });
 
   it("redacts image payloads, credentials, personal data and private reasoning", () => {

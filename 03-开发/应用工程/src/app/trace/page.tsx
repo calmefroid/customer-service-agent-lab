@@ -62,7 +62,7 @@ const eventTypeLabels: Record<TraceEventType, string> = {
   route: "路由",
   rag: "RAG",
   tool: "工具",
-  rule: "规则",
+  rule: "风险规则",
   confirmation: "确认",
   output: "输出",
   error: "错误",
@@ -99,13 +99,16 @@ export default function TracePage() {
   const load = useCallback(async () => {
     setError("");
     try {
-      const response = await fetch("/api/trace", { cache: "no-store" });
+      const linkedTraceId = new URLSearchParams(window.location.search).get("traceId") ?? "";
+      const endpoint = linkedTraceId ? `/api/trace?traceId=${encodeURIComponent(linkedTraceId)}` : "/api/trace";
+      const response = await fetch(endpoint, { cache: "no-store" });
       if (!response.ok) throw new Error("加载失败");
       const data = (await response.json()) as { records: TraceView[] };
       const next = [...data.records].reverse();
       setRecords(next);
-      const linkedTraceId = new URLSearchParams(window.location.search).get("traceId") ?? "";
-      setSelectedId((current) => current || (next.some((record) => record.traceId === linkedTraceId) ? linkedTraceId : next[0]?.traceId) || "");
+      setSelectedId((current) => linkedTraceId && next.some((record) => record.traceId === linkedTraceId)
+        ? linkedTraceId
+        : next.some((record) => record.traceId === current) ? current : next[0]?.traceId ?? "");
     } catch {
       setError("Trace 暂时无法读取，请确认本地服务仍在运行。");
     } finally {
@@ -344,12 +347,17 @@ function TraceDetail({ record }: { record: TraceView }) {
 }
 
 function TraceEventTimeline({ events }: { events: TraceEvent[] }) {
+  const displayLabel = (event: TraceEvent) => {
+    const serialized = JSON.stringify(event.payload);
+    const fallback = /fallback|fallbackReason|兜底/i.test(serialized);
+    return fallback ? `${eventTypeLabels[event.type]} / fallback` : eventTypeLabels[event.type];
+  };
   return (
     <div className={styles.eventTimeline}>
       {events.map((event) => (
         <details key={event.eventId} className={styles.debugBlock}>
           <summary>
-            <span>{String(event.sequence).padStart(2, "0")} · {eventTypeLabels[event.type]}</span>
+            <span>{String(event.sequence).padStart(2, "0")} · {displayLabel(event)}</span>
             <code>{event.status}</code>
             <time>{formatTime(event.createdAt)}</time>
           </summary>
