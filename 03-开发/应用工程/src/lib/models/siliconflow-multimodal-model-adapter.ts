@@ -26,6 +26,20 @@ interface ObservationPayload {
   requiresBusinessRouting: boolean;
 }
 
+const FORBIDDEN_IMAGE_CONCLUSION = /可以退换|符合退换资格|退换资格已确认|责任(?:在|属于|由)|应当?赔偿|同意赔偿|(?:确认|判定)(?:为|是)?.{0,4}(?:正品|假货)|(?:就是|属于)(?:正品|假货)/;
+
+function enforceObservationBoundary(observation: ObservationPayload): ObservationPayload {
+  const combined = `${observation.summary} ${observation.responseText}`;
+  if (!FORBIDDEN_IMAGE_CONCLUSION.test(combined)) return observation;
+  const boundary = "无法仅凭图片确认真伪、责任、退换资格或赔偿结果";
+  return {
+    summary: "图片中存在需要进一步核验的可见信息，无法据此形成业务结论",
+    uncertainties: [...new Set([...observation.uncertainties, boundary])],
+    responseText: `我只能描述图片中的可见信息，${boundary}。需要继续处理时，我可以帮你进入对应流程核验。`,
+    requiresBusinessRouting: observation.requiresBusinessRouting,
+  };
+}
+
 export interface OpenAICompatibleMultimodalOptions {
   baseUrl: string;
   apiKey: string;
@@ -92,7 +106,7 @@ function parseObservation(raw: string): ObservationPayload {
   const responseText = typeof record.responseText === "string" && record.responseText.trim()
     ? record.responseText.trim()
     : `我能看到：${summary}${uncertainties.length ? `。还需确认：${uncertainties.join("；")}` : ""}。`;
-  return { summary, uncertainties, responseText, requiresBusinessRouting: record.requiresBusinessRouting };
+  return enforceObservationBoundary({ summary, uncertainties, responseText, requiresBusinessRouting: record.requiresBusinessRouting });
 }
 
 export class OpenAICompatibleMultimodalModelAdapter implements MultimodalModelAdapter {

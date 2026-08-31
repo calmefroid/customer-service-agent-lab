@@ -32,4 +32,25 @@ describe("structured route schema", () => {
     expect(route.requiresHuman).toBe(true);
     expect(route.remainingIntents).toContain("service_ticket_create");
   });
+
+  it("does not treat an attachment or return module as proof of a return intent", () => {
+    const route = fallbackRoute({
+      message: "这张铭牌很模糊，能看清吗",
+      module: "return",
+      attachment: { name: "virtual-blurry.jpg", type: "image/jpeg", size: 700 },
+      observations: ["图片中的铭牌区域模糊，型号字符无法确认"],
+    });
+
+    expect(route).toMatchObject({ intent: "clarification", needsClarification: true });
+  });
+
+  it("combines a neutral user message with visible damage observation", () => {
+    const route = fallbackRoute({
+      message: "请根据图片帮我处理",
+      attachment: { name: "virtual-damage.jpg", type: "image/jpeg", size: 900 },
+      observations: ["图片中可见灯罩边缘存在裂纹样现象；不确定项：无法判断责任和退换资格"],
+    });
+
+    expect(route).toMatchObject({ intent: "return_exchange", module: "return", topic: "return.arrival_damage" });
+  });
 });
