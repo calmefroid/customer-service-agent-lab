@@ -16,19 +16,50 @@ import { InMemorySessionStore, type ImageObservation } from "@/lib/sessions";
 import { fallbackRoute, parseStructuredRoute, ROUTER_SYSTEM_PROMPT, ROUTE_RESPONSE_SCHEMA } from "./route-schema";
 import type { AgentRuntimeDependencies, RuntimeRunOptions } from "./types";
 
+const TRACE_PROMPTS = {
+  imageObservation: {
+    templateId: "image-observation-system",
+    templateVersion: "runtime-v2",
+    schemaVersion: "image-observation-1.0.0",
+  },
+  textRoute: {
+    templateId: "intent-router-system",
+    templateVersion: "runtime-v2",
+    schemaVersion: "route-decision-1.1.0",
+  },
+  lowRiskAnswer: {
+    templateId: "consumer-answer-system",
+    templateVersion: "runtime-v2",
+    schemaVersion: "consumer-answer-1.1.0",
+  },
+} as const;
+
+type ModelOperation = "image_observation" | "text_route" | "low_risk_answer";
+type ModelIdentity = { provider: string; model: string; mode: "mock" | "live" };
+
 function redactString(value: string): string {
   return value
-    .replace(/data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=]+/gi, "[REDACTED_IMAGE_PAYLOAD]")
+    .replace(/<think>[\s\S]*?<\/think>/gi, "[REDACTED_PRIVATE_REASONING]")
+    .replace(/<think>[\s\S]*$/gi, "[REDACTED_PRIVATE_REASONING]")
+    .replace(/(?:chain[_ -]?of[_ -]?thought|private[_ -]?reasoning)\s*[:=][^\n]*/gi, "[REDACTED_PRIVATE_REASONING]")
+    .replace(/data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=\s]+/gi, "[REDACTED_IMAGE_PAYLOAD]")
     .replace(/data.?url|image.?data/gi, "[REDACTED_IMAGE_FIELD]")
     .replace(/base64/gi, "[REDACTED_ENCODING]")
+    .replace(/[A-Za-z0-9+/]{64,}={0,2}/g, "[REDACTED_ENCODED_PAYLOAD]")
     .replace(/1\d{2}\d{4}(\d{4})/g, "1********$1")
     .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "***@***")
+    .replace(/(?:北京市|上海市|天津市|重庆市|[\p{Script=Han}]{2,8}(?:省|自治区))[\p{Script=Han}A-Za-z0-9* -]{2,50}(?:路|街|道|巷)[\p{Script=Han}A-Za-z0-9* -]{0,20}(?:号|室)/gu, "[REDACTED_ADDRESS]")
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer ***")
+    .replace(/authorization\s*[:=]\s*bearer\s+[^\s,;]+/gi, "Authorization: ***")
     .replace(/(sk-|api[_-]?key[=: ]+)[A-Za-z0-9_-]+/gi, "$1***");
 }
 
 function sanitizeForTrace(value: unknown, key = ""): unknown {
   if (/api.?key|authorization|secret|token/i.test(key)) return "***";
   if (/data.?url|base64|image.?data/i.test(key)) return undefined;
+  if (/chain.?of.?thought|private.?reasoning|hidden.?reasoning|thinking/i.test(key)) return "[OMITTED]";
+  if (/(?:phone|mobile)$/i.test(key)) return "[REDACTED_PHONE]";
+  if (/address$/i.test(key)) return "[REDACTED_ADDRESS]";
   if (typeof value === "string") return redactString(value);
   if (Array.isArray(value)) return value.map((item) => sanitizeForTrace(item));
   if (value && typeof value === "object") {
@@ -64,25 +95,50 @@ function mapModelError(error: unknown): AgentPublicError {
   return { code: "RUNTIME_FAILURE", message: "处理请求时发生错误，请重试", retryable: true };
 }
 
+function modelFailureReason(error: unknown, defaultReason: string): string {
+  if (error instanceof ModelAdapterError) {
+    if (error.code === "cancelled") return "abort";
+    return error.code;
+  }
+  return defaultReason;
+}
+
+function modelInputSummary(
+  operation: ModelOperation,
+  prompt: typeof TRACE_PROMPTS[keyof typeof TRACE_PROMPTS],
+  input: unknown,
+): string {
+  return JSON.stringify(sanitizeForTrace({ operation, prompt, input }));
+}
+
+function modelOutputSummary(output: unknown, fallbackReason?: string): string {
+  return JSON.stringify(sanitizeForTrace({
+    ...(fallbackReason ? { fallbackReason } : {}),
+    ...(output === undefined ? {} : { output }),
+  }));
+}
+
 async function withTimeout<T>(
   operation: (signal: AbortSignal) => Promise<T>,
   parentSignal: AbortSignal | undefined,
   timeoutMs: number,
 ): Promise<T> {
+  if (parentSignal?.aborted) throw new ModelAdapterError("cancelled", "生成已停止", false);
   const controller = new AbortController();
   const onParentAbort = () => controller.abort(parentSignal?.reason);
   parentSignal?.addEventListener("abort", onParentAbort, { once: true });
   const timeout = setTimeout(() => controller.abort("model-timeout"), timeoutMs);
+  const aborted = new Promise<never>((_, reject) => {
+    controller.signal.addEventListener("abort", () => {
+      if (parentSignal?.aborted) reject(new ModelAdapterError("cancelled", "生成已停止", false));
+      else reject(new ModelAdapterError("timeout", "模型响应超时", true));
+    }, { once: true });
+  });
 
   try {
     return await Promise.race([
       operation(controller.signal),
-      new Promise<never>((_, reject) => {
-        controller.signal.addEventListener("abort", () => {
-          if (parentSignal?.aborted) reject(new ModelAdapterError("cancelled", "生成已停止", false));
-          else reject(new ModelAdapterError("timeout", "模型响应超时", true));
-        }, { once: true });
-      }),
+      aborted,
     ]);
   } finally {
     clearTimeout(timeout);
@@ -104,7 +160,7 @@ export class AgentRuntime {
   }
 
   async *run(request: ChatRequest, options: RuntimeRunOptions = {}): AsyncGenerator<AgentEvent> {
-    const traceId = `TR-RUNTIME-${this.idFactory()}`;
+    const traceId = options.traceId ?? `TR-RUNTIME-${this.idFactory()}`;
     const messageId = `MSG-${this.idFactory()}`;
     let eventSequence = 0;
     let traceSequence = 0;
@@ -129,6 +185,44 @@ export class AgentRuntime {
         ...event,
       } as TraceEvent);
     };
+    const appendModelTrace = ({
+      identity,
+      operation,
+      status,
+      inputSummary,
+      output,
+      fallbackReason,
+      durationMs,
+    }: {
+      identity: ModelIdentity;
+      operation: ModelOperation;
+      status: "started" | "completed" | "failed";
+      inputSummary: string;
+      output?: unknown;
+      fallbackReason?: string;
+      durationMs?: number;
+    }) => appendTrace({
+      type: "model",
+      status,
+      ...(durationMs === undefined ? {} : { durationMs }),
+      payload: {
+        provider: identity.provider,
+        model: identity.model,
+        mode: identity.mode,
+        inputSummary,
+        outputSummary: modelOutputSummary({ operation, status, result: output }, fallbackReason),
+      },
+    });
+    let abortTraceRecorded = false;
+    const appendAbortTrace = (internalCode: string, message: string) => {
+      if (abortTraceRecorded) return;
+      abortTraceRecorded = true;
+      appendTrace({
+        type: "error",
+        status: "failed",
+        payload: { code: "GENERATION_STOPPED", message, retryable: false, internalCode },
+      });
+    };
     const stopped = () => options.signal?.aborted === true;
     const stoppedEvent = () => makeEvent<Extract<AgentEvent, { type: "error" }>>({
       type: "error",
@@ -138,6 +232,7 @@ export class AgentRuntime {
     this.sessions.getOrCreate(request.sessionId);
     this.sessions.appendMessage(request.sessionId, { role: "user", content: request.message, createdAt: createdAt() });
     if (stopped()) {
+      appendAbortTrace("ABORT_BEFORE_RUNTIME", "请求开始前收到中断");
       yield stoppedEvent();
       return;
     }
@@ -146,38 +241,72 @@ export class AgentRuntime {
       let observation: ImageObservation | undefined;
       if (request.attachment) {
         const startedAt = this.now().getTime();
+        const imageInputSummary = modelInputSummary(
+          "image_observation",
+          TRACE_PROMPTS.imageObservation,
+          {
+            message: request.message,
+            module: request.module,
+            attachment: {
+              name: request.attachment.name,
+              type: request.attachment.type,
+              size: request.attachment.size,
+            },
+          },
+        );
         yield makeEvent<Extract<AgentEvent, { type: "progress" }>>({
           type: "progress",
           progress: { stage: "image_observation", label: "正在识别图片中的可见信息", status: "started" },
         });
         if (stopped()) {
+          appendAbortTrace("ABORT_BEFORE_IMAGE_OBSERVATION", "图片观察启动前收到中断");
           yield stoppedEvent();
           return;
         }
 
         const session = this.sessions.getOrCreate(request.sessionId);
-        const output = await withTimeout(
-          (signal) => this.dependencies.multimodalModel.observe({
-            message: request.message,
-            module: request.module,
-            attachment: request.attachment!,
-            history: session.messages,
-          }, { signal }),
-          options.signal,
-          this.modelTimeoutMs,
-        );
-        appendTrace({
-          type: "model",
-          status: "completed",
-          durationMs: this.now().getTime() - startedAt,
-          payload: {
-            provider: output.provider,
-            model: output.model,
-            mode: output.mode,
-            inputSummary: JSON.stringify(sanitizeForTrace({ message: request.message, attachment: request.attachment })),
-            outputSummary: JSON.stringify(sanitizeForTrace({ summary: output.summary, uncertainties: output.uncertainties, requiresBusinessRouting: output.requiresBusinessRouting })),
-          },
+        const imageIdentity = this.dependencies.multimodalModel;
+        appendModelTrace({
+          identity: imageIdentity,
+          operation: "image_observation",
+          status: "started",
+          inputSummary: imageInputSummary,
         });
+        let output;
+        try {
+          output = await withTimeout(
+            (signal) => this.dependencies.multimodalModel.observe({
+              message: request.message,
+              module: request.module,
+              attachment: request.attachment!,
+              history: session.messages,
+            }, { signal }),
+            options.signal,
+            this.modelTimeoutMs,
+          );
+          appendModelTrace({
+            identity: output,
+            operation: "image_observation",
+            status: "completed",
+            inputSummary: imageInputSummary,
+            output: {
+              summary: output.summary,
+              uncertainties: output.uncertainties,
+              requiresBusinessRouting: output.requiresBusinessRouting,
+            },
+            durationMs: this.now().getTime() - startedAt,
+          });
+        } catch (error) {
+          appendModelTrace({
+            identity: imageIdentity,
+            operation: "image_observation",
+            status: "failed",
+            inputSummary: imageInputSummary,
+            fallbackReason: modelFailureReason(error, "image_observation_failed"),
+            durationMs: this.now().getTime() - startedAt,
+          });
+          throw error;
+        }
         observation = {
           attachmentName: request.attachment.name,
           summary: output.summary,
@@ -195,6 +324,7 @@ export class AgentRuntime {
           appendTrace({ type: "route", status: "completed", payload: { selected: route, candidates: [{ intent: route.intent, topic: route.topic, score: route.confidence }] } });
           for (const delta of chunks(output.responseText)) {
             if (stopped()) {
+              appendAbortTrace("ABORT_DURING_IMAGE_RESPONSE", "图片观察回复生成时收到中断");
               yield stoppedEvent();
               return;
             }
@@ -220,6 +350,7 @@ export class AgentRuntime {
         progress: { stage: "routing", label: "正在理解问题并选择处理路径", status: "started" },
       });
       if (stopped()) {
+        appendAbortTrace("ABORT_BEFORE_TEXT_ROUTE", "文字模型路由启动前收到中断");
         yield stoppedEvent();
         return;
       }
@@ -237,32 +368,68 @@ export class AgentRuntime {
         applicationSystemPrompt: ROUTER_SYSTEM_PROMPT,
         responseSchema: ROUTE_RESPONSE_SCHEMA,
       };
-      const modelOutput = await withTimeout(
-        (signal) => this.dependencies.textModel.route(modelInput, { signal }),
-        options.signal,
-        this.modelTimeoutMs,
-      );
-      appendTrace({
-        type: "model",
-        status: "completed",
-        durationMs: this.now().getTime() - routeStartedAt,
-        payload: {
-          provider: modelOutput.provider,
-          model: modelOutput.model,
-          mode: modelOutput.mode,
-          inputSummary: JSON.stringify(sanitizeForTrace({
-            templateId: "intent-router-system",
-            version: "runtime-v1",
-            applicationSystemPrompt: ROUTER_SYSTEM_PROMPT,
-            messages: session.messages,
-            observations,
-            responseSchema: ROUTE_RESPONSE_SCHEMA,
-          })),
-          outputSummary: redactString(modelOutput.raw),
-        },
+      const routeInputSummary = modelInputSummary("text_route", TRACE_PROMPTS.textRoute, {
+        message: request.message,
+        module: request.module,
+        action: request.action,
+        attachment: request.attachment ? {
+          name: request.attachment.name,
+          type: request.attachment.type,
+          size: request.attachment.size,
+        } : undefined,
+        history: session.messages,
+        observations,
+        remainingIntents: session.remainingIntents,
       });
+      const routeIdentity = this.dependencies.textModel;
+      appendModelTrace({
+        identity: routeIdentity,
+        operation: "text_route",
+        status: "started",
+        inputSummary: routeInputSummary,
+      });
+      let modelOutput;
+      try {
+        modelOutput = await withTimeout(
+          (signal) => this.dependencies.textModel.route(modelInput, { signal }),
+          options.signal,
+          this.modelTimeoutMs,
+        );
+      } catch (error) {
+        appendModelTrace({
+          identity: routeIdentity,
+          operation: "text_route",
+          status: "failed",
+          inputSummary: routeInputSummary,
+          fallbackReason: modelFailureReason(error, "text_route_failed"),
+          durationMs: this.now().getTime() - routeStartedAt,
+        });
+        throw error;
+      }
 
       const parsed = parseStructuredRoute(modelOutput.raw);
+      appendModelTrace({
+        identity: modelOutput,
+        operation: "text_route",
+        status: "completed",
+        inputSummary: routeInputSummary,
+        output: {
+          raw: modelOutput.raw,
+          structuredOutput: parsed.ok ? "accepted" : "rejected",
+        },
+        ...(parsed.ok ? {} : { fallbackReason: parsed.reason }),
+        durationMs: this.now().getTime() - routeStartedAt,
+      });
+      appendTrace({
+        type: "rule",
+        status: "completed",
+        payload: {
+          ruleId: "RULE-STRUCTURED-OUTPUT-PARSE-001",
+          matched: parsed.ok,
+          evidence: [TRACE_PROMPTS.textRoute.schemaVersion, ...(parsed.ok ? [] : parsed.issues)],
+          effect: parsed.ok ? "accept_structured_route" : `fallback_to_deterministic_route:${parsed.reason}`,
+        },
+      });
       let route: RouteDecision;
       if (parsed.ok) route = parsed.value;
       else {
@@ -282,14 +449,6 @@ export class AgentRuntime {
       if (request.action || deterministicGuard.topic.startsWith("safety.") || deterministicGuard.requiresHuman) {
         route = deterministicGuard;
         appendTrace({
-          type: "route",
-          status: "completed",
-          payload: {
-            selected: route,
-            candidates: [{ intent: route.intent, topic: route.topic, score: route.confidence }],
-          },
-        });
-        appendTrace({
           type: "rule",
           status: "completed",
           payload: {
@@ -308,6 +467,7 @@ export class AgentRuntime {
       });
 
       if (stopped()) {
+        appendAbortTrace("ABORT_AFTER_TEXT_ROUTE", "文字模型路由完成后收到中断");
         yield stoppedEvent();
         return;
       }
@@ -318,7 +478,7 @@ export class AgentRuntime {
       });
       // yield 之后再次检查，使客户端“停止生成”可以在任何写工具启动前生效。
       if (stopped()) {
-        appendTrace({ type: "error", status: "completed", payload: { code: "GENERATION_STOPPED", message: "写操作启动前收到中断", retryable: false, internalCode: "ABORT_BEFORE_WORKFLOW" } });
+        appendAbortTrace("ABORT_BEFORE_WORKFLOW", "写操作启动前收到中断");
         yield stoppedEvent();
         return;
       }
@@ -331,6 +491,7 @@ export class AgentRuntime {
         signal: options.signal,
       });
       if (stopped()) {
+        appendAbortTrace("ABORT_AFTER_WORKFLOW", "业务工作流完成后收到中断");
         yield stoppedEvent();
         return;
       }
@@ -338,60 +499,73 @@ export class AgentRuntime {
         type: "progress",
         progress: { stage: "workflow", label: "请求处理完成", status: "completed", durationMs: this.now().getTime() - workflowStartedAt },
       });
+      if (stopped()) {
+        appendAbortTrace("ABORT_AFTER_WORKFLOW_PROGRESS", "业务工作流完成后收到中断");
+        yield stoppedEvent();
+        return;
+      }
 
       let responseMessage = workflowResponse.message;
       if (this.dependencies.textModel.mode === "live" && workflowResponse.riskLevel === "low") {
         const answerStartedAt = this.now().getTime();
+        const answerInput = {
+          message: request.message,
+          route,
+          history: this.sessions.getOrCreate(request.sessionId).messages,
+          observations,
+          workflowResult: {
+            message: workflowResponse.message,
+            intent: workflowResponse.intent,
+            riskLevel: workflowResponse.riskLevel,
+            ...(workflowResponse.ui ? { uiKind: workflowResponse.ui.kind } : {}),
+          },
+        };
+        const answerInputSummary = modelInputSummary("low_risk_answer", TRACE_PROMPTS.lowRiskAnswer, answerInput);
+        const answerIdentity = this.dependencies.textModel;
         yield makeEvent<Extract<AgentEvent, { type: "progress" }>>({
           type: "progress",
           progress: { stage: "answer_generation", label: "正在整理回复", status: "started" },
         });
+        if (stopped()) {
+          appendAbortTrace("ABORT_BEFORE_ANSWER_GENERATION", "低风险回复模型启动前收到中断");
+          yield stoppedEvent();
+          return;
+        }
+        appendModelTrace({
+          identity: answerIdentity,
+          operation: "low_risk_answer",
+          status: "started",
+          inputSummary: answerInputSummary,
+        });
         try {
           const answer = await withTimeout(
-            (signal) => this.dependencies.textModel.answer({
-              message: request.message,
-              route,
-              history: this.sessions.getOrCreate(request.sessionId).messages,
-              observations,
-              workflowResult: {
-                message: workflowResponse.message,
-                intent: workflowResponse.intent,
-                riskLevel: workflowResponse.riskLevel,
-                ...(workflowResponse.ui ? { uiKind: workflowResponse.ui.kind } : {}),
-              },
-            }, { signal }),
+            (signal) => this.dependencies.textModel.answer(answerInput, { signal }),
             options.signal,
             this.modelTimeoutMs,
           );
           responseMessage = answer.text;
-          appendTrace({
-            type: "model",
+          appendModelTrace({
+            identity: answer,
+            operation: "low_risk_answer",
             status: "completed",
+            inputSummary: answerInputSummary,
+            output: { text: answer.text },
             durationMs: this.now().getTime() - answerStartedAt,
-            payload: {
-              provider: answer.provider,
-              model: answer.model,
-              mode: answer.mode,
-              inputSummary: JSON.stringify(sanitizeForTrace({
-                templateId: "consumer-answer-system",
-                version: "runtime-v1",
-                route,
-                observations,
-                workflowResult: {
-                  message: workflowResponse.message,
-                  intent: workflowResponse.intent,
-                  riskLevel: workflowResponse.riskLevel,
-                  uiKind: workflowResponse.ui?.kind,
-                },
-              })),
-              outputSummary: redactString(answer.text),
-            },
           });
           yield makeEvent<Extract<AgentEvent, { type: "progress" }>>({
             type: "progress",
             progress: { stage: "answer_generation", label: "回复已生成", status: "completed", durationMs: this.now().getTime() - answerStartedAt },
           });
         } catch (error) {
+          const fallbackReason = modelFailureReason(error, "answer_generation_failed");
+          appendModelTrace({
+            identity: answerIdentity,
+            operation: "low_risk_answer",
+            status: "failed",
+            inputSummary: answerInputSummary,
+            fallbackReason,
+            durationMs: this.now().getTime() - answerStartedAt,
+          });
           if (options.signal?.aborted || error instanceof ModelAdapterError && error.code === "cancelled") throw error;
           appendTrace({
             type: "error",
@@ -400,7 +574,7 @@ export class AgentRuntime {
               code: "MODEL_ANSWER_FALLBACK",
               message: "模型回答生成失败，已使用工作流安全回复",
               retryable: false,
-              internalCode: error instanceof Error ? error.name : "UNKNOWN_ANSWER_ERROR",
+              internalCode: "MODEL_ANSWER_FALLBACK",
             },
           });
           yield makeEvent<Extract<AgentEvent, { type: "progress" }>>({
@@ -415,6 +589,7 @@ export class AgentRuntime {
       }
       for (const delta of chunks(responseMessage)) {
         if (stopped()) {
+          appendAbortTrace("ABORT_DURING_TOKEN_STREAM", "回复流式输出时收到中断");
           yield stoppedEvent();
           return;
         }
@@ -434,7 +609,20 @@ export class AgentRuntime {
       yield makeEvent<Extract<AgentEvent, { type: "final" }>>({ type: "final", response: finalResponse });
     } catch (error) {
       const publicError = mapModelError(error);
-      appendTrace({ type: "error", status: "failed", payload: { ...publicError, internalCode: error instanceof Error ? error.name : "UNKNOWN_RUNTIME_ERROR" } });
+      if (publicError.code === "GENERATION_STOPPED") {
+        appendAbortTrace("ABORT_DURING_MODEL", "模型调用期间收到中断");
+      } else {
+        appendTrace({
+          type: "error",
+          status: "failed",
+          payload: {
+            ...publicError,
+            internalCode: error instanceof ModelAdapterError
+              ? `MODEL_${error.code.toUpperCase()}`
+              : error instanceof Error ? error.name : "UNKNOWN_RUNTIME_ERROR",
+          },
+        });
+      }
       yield makeEvent<Extract<AgentEvent, { type: "error" }>>({ type: "error", error: publicError });
     }
   }
