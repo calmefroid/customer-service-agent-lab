@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { validateAttachment } from "@/lib/agent-runtime/attachment-validation";
 import { createConfiguredAgentRuntime } from "@/lib/agent-runtime/configured-runtime";
+import { validateConfirmationCommand } from "@/lib/confirmation-protocol";
 import type { AgentPublicError, ChatRequest, ChatResponse } from "@/lib/contracts";
 import { unifiedTraceSink } from "@/lib/trace-store";
 
@@ -20,6 +21,13 @@ export async function POST(request: Request) {
   }
   if (typeof body.message !== "string") {
     return NextResponse.json({ error: "message 必须为字符串" }, { status: 400 });
+  }
+  const confirmationValidation = validateConfirmationCommand(body.confirmation, body.action);
+  if (!confirmationValidation.ok) {
+    return NextResponse.json(
+      { error: confirmationValidation.message, code: confirmationValidation.code },
+      { status: 400 },
+    );
   }
   const attachmentError = validateAttachment(body.attachment);
   if (attachmentError) return NextResponse.json({ error: attachmentError }, { status: 400 });

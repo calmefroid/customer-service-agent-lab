@@ -122,6 +122,11 @@ export interface ChatRequest {
   attachment?: AttachmentMeta;
   formData?: ReturnFormData;
   serviceFormData?: ServiceTicketFormData;
+  /**
+   * Stage-3 confirmation command. `operation` is intentionally absent: the
+   * server resolves it from its ConfirmationRequest store by request ID.
+   */
+  confirmation?: ConfirmationCommand;
 }
 
 export interface ProductView {
@@ -173,6 +178,7 @@ export type ChatUi =
   | { kind: "knowledge_answer"; title: string; items: string[]; footer: string }
   | { kind: "human_handoff"; title: string; queue: string; reason: string }
   | { kind: "service_menu" }
+  | { kind: "confirmation"; request: ConfirmationRequest }
   | {
       kind: "logistics_urge_confirm";
       orderId: string;
@@ -306,6 +312,9 @@ export type ConfirmationOperation =
   | "return_exchange_create"
   | "service_ticket_create";
 
+export const CONFIRMATION_DECISION_ACTIONS = ["confirm", "modify", "cancel"] as const;
+export type ConfirmationDecisionAction = (typeof CONFIRMATION_DECISION_ACTIONS)[number];
+
 export interface ConfirmationRequest<TDraft extends Record<string, unknown> = Record<string, unknown>> {
   confirmationRequestId: string;
   sessionId: string;
@@ -327,10 +336,27 @@ export interface ConfirmationRequest<TDraft extends Record<string, unknown> = Re
 
 export interface ConfirmationDecision<TSnapshot extends Record<string, unknown> = Record<string, unknown>> {
   confirmationRequestId: string;
-  action: "confirm" | "modify" | "cancel";
+  action: ConfirmationDecisionAction;
   finalSnapshot?: Readonly<TSnapshot>;
   decidedAt: string;
 }
+
+interface ConfirmationCommandBase {
+  confirmationRequestId: string;
+  confirmationToken: string;
+  idempotencyKey: string;
+}
+
+/** Consumer-to-server wire command. Never accepts a client-provided operation. */
+export type ConfirmationCommand<TSnapshot extends Record<string, unknown> = Record<string, unknown>> =
+  | (ConfirmationCommandBase & {
+      action: "confirm" | "modify";
+      finalSnapshot: Readonly<TSnapshot>;
+    })
+  | (ConfirmationCommandBase & {
+      action: "cancel";
+      finalSnapshot?: never;
+    });
 
 export const KNOWLEDGE_RETRIEVAL_STATUSES = ["hit", "no_hit", "conflict", "expired"] as const;
 export type KnowledgeRetrievalStatus = (typeof KNOWLEDGE_RETRIEVAL_STATUSES)[number];

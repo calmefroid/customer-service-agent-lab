@@ -2,14 +2,15 @@ import { NextResponse } from "next/server";
 
 import { validateAttachment } from "@/lib/agent-runtime/attachment-validation";
 import { createConfiguredAgentRuntime } from "@/lib/agent-runtime/configured-runtime";
+import { validateConfirmationCommand } from "@/lib/confirmation-protocol";
 import type { AgentEvent, ChatRequest } from "@/lib/contracts";
 import { unifiedTraceSink } from "@/lib/trace-store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function invalidRequest(message: string) {
-  return NextResponse.json({ error: message }, { status: 400 });
+function invalidRequest(message: string, code?: string) {
+  return NextResponse.json({ error: message, ...(code ? { code } : {}) }, { status: 400 });
 }
 
 function validateChatRequest(body: Partial<ChatRequest>): string | undefined {
@@ -41,6 +42,8 @@ export async function POST(request: Request) {
   }
   const validationError = validateChatRequest(body);
   if (validationError) return invalidRequest(validationError);
+  const confirmationValidation = validateConfirmationCommand(body.confirmation, body.action);
+  if (!confirmationValidation.ok) return invalidRequest(confirmationValidation.message, confirmationValidation.code);
 
   const agent = createConfiguredAgentRuntime({ traceSink: unifiedTraceSink });
   const chatRequest = body as ChatRequest;
