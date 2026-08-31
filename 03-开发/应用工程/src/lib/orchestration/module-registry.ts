@@ -1,5 +1,6 @@
 import type { AgentEvent, ChatRequest, ChatResponse, RouteDecision } from "@/lib/contracts";
 import type { ImageObservation } from "@/lib/sessions";
+import { createTraceWriter, type TraceWriter } from "@/lib/trace-store";
 
 export const ORCHESTRATION_PHASES = [
   "router",
@@ -13,6 +14,8 @@ export type OrchestrationPhase = (typeof ORCHESTRATION_PHASES)[number];
 
 export interface OrchestrationContext {
   request: ChatRequest;
+  traceId: string;
+  trace: TraceWriter;
   route?: RouteDecision;
   observation?: ImageObservation;
   signal?: AbortSignal;
@@ -53,6 +56,7 @@ export class ModuleRegistry {
   async execute(
     request: ChatRequest,
     options: {
+      traceId?: string;
       route?: RouteDecision;
       observation?: ImageObservation;
       signal?: AbortSignal;
@@ -63,13 +67,17 @@ export class ModuleRegistry {
     if (!module) {
       throw new Error("NO_ORCHESTRATION_MODULE");
     }
-    return module.execute({
+    const traceId = options.traceId ?? `TR-ORCH-${crypto.randomUUID()}`;
+    const response = await module.execute({
       request,
+      traceId,
+      trace: createTraceWriter(traceId, request.sessionId),
       route: options.route,
       observation: options.observation,
       signal: options.signal,
       emit: options.emit ?? (() => undefined),
     });
+    return { ...response, traceId };
   }
 }
 

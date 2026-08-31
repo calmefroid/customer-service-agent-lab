@@ -40,6 +40,7 @@ const disputePattern = /赔偿|判责|谁的责任|投诉|消协|必须赔|资�
 type InjectedToolOutcome = Exclude<AdapterCallOptions["outcome"], undefined>;
 
 export interface MockOrchestrationOptions {
+  traceId?: string;
   route?: RouteDecision;
   toolOutcomes?: {
     latestOrder?: InjectedToolOutcome;
@@ -50,11 +51,12 @@ export interface MockOrchestrationOptions {
 }
 
 const routeOverrides = new WeakMap<ChatRequest, RouteDecision>();
+const traceIdOverrides = new WeakMap<ChatRequest, string>();
 
 function workflowContext(request: ChatRequest): WorkflowContext {
   return {
     sessionId: request.sessionId,
-    traceId: `pending:${request.sessionId}`,
+    traceId: traceIdOverrides.get(request) ?? `pending:${request.sessionId}`,
     identity: { customerId: DEMO_CUSTOMER_ID, verified: true },
   };
 }
@@ -420,7 +422,8 @@ function createTrace(
   sources: TraceSource[],
   stages?: TraceStage[],
 ): string {
-  const traceId = `TR-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const traceId = traceIdOverrides.get(request) ?? `TR-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  traceIdOverrides.set(request, traceId);
   const detailedStages = stages ?? steps.map((step, index) => ({
     id: `step-${index + 1}`,
     title: step,
@@ -474,6 +477,7 @@ export async function orchestrateMock(
   request: ChatRequest,
   options: MockOrchestrationOptions = {},
 ): Promise<ChatResponse> {
+  traceIdOverrides.set(request, options.traceId ?? `TR-ORCH-${crypto.randomUUID()}`);
   if (options.route) routeOverrides.set(request, options.route);
   const intent = options.route?.intent ?? detectIntent(request.message, request);
 

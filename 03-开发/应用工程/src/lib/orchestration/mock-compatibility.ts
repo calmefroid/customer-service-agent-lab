@@ -10,7 +10,7 @@ const legacyMockModule: OrchestrationModule = {
   priority: -100,
   phases: ["router", "guardrail", "workflow", "tool_or_rag", "output"],
   supports: () => true,
-  execute: ({ request, route }) => orchestrateMock(request, { route }),
+  execute: ({ request, traceId, route }) => orchestrateMock(request, { traceId, route }),
 };
 
 agentModuleRegistry.register(legacyMockModule);
@@ -20,6 +20,7 @@ export async function runRegisteredAgent(
   runtimeContext?: RuntimeWorkflowContext,
 ) {
   return agentModuleRegistry.execute(request, {
+    traceId: runtimeContext?.traceId,
     route: runtimeContext?.route,
     observation: runtimeContext?.observation,
     signal: runtimeContext?.signal,

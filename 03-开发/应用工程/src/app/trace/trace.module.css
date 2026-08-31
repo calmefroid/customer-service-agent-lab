@@ -44,9 +44,9 @@
 .stat small { margin-top: 5px; color: #798587; font-size: 10px; }
 .statDanger > span { color: #b42318; background: #fff0ee; }
 
-.toolbar { display: grid; grid-template-columns: minmax(240px, 1fr) 160px 140px auto; gap: 9px; margin-top: 16px; }
-.toolbar select, .toolbar button, .search { height: 41px; border: 1px solid #dfe6e4; border-radius: 11px; background: #fff; }
-.toolbar select { outline: 0; padding: 0 11px; color: #465456; font-size: 11px; }
+.toolbar { display: grid; grid-template-columns: minmax(240px, 1fr) repeat(4, minmax(120px, .45fr)) repeat(2, minmax(170px, .62fr)) auto; gap: 9px; margin-top: 16px; }
+.toolbar select, .toolbar button, .toolbar > input, .search { height: 41px; border: 1px solid #dfe6e4; border-radius: 11px; background: #fff; }
+.toolbar select, .toolbar > input { min-width: 0; outline: 0; padding: 0 11px; color: #465456; font-size: 11px; }
 .search { display: flex; align-items: center; gap: 8px; padding: 0 12px; color: #7d898b; }
 .search input { width: 100%; outline: 0; border: 0; color: #263234; background: transparent; font-size: 11px; }
 .clear { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 0 12px; color: #9b3d35; font-size: 11px; font-weight: 680; }
@@ -130,6 +130,12 @@
 .finalDecision span { color: #176b62; font-size: 8px; font-weight: 750; }
 .finalDecision p { margin: 6px 0; color: #405052; font-size: 9px; line-height: 1.55; }
 .finalDecision small { color: #7e898b; font-size: 8px; line-height: 1.5; }
+.eventTimeline { display: grid; gap: 7px; }
+.eventTimeline .debugBlock { margin-top: 0; }
+.eventTimeline .debugBlock > summary { display: grid; grid-template-columns: minmax(150px, 1fr) auto auto; align-items: center; gap: 10px; }
+.eventTimeline summary span { color: #314b47; }
+.eventTimeline summary code { padding: 3px 6px; border-radius: 5px; color: #176b62; background: #e9f5f2; font-size: 8px; }
+.eventTimeline summary time { color: #879294; font-size: 8px; }
 .detailSection { margin-top: 24px; }
 .sectionTitle { display: flex; align-items: center; justify-content: space-between; margin-bottom: 11px; }
 .sectionTitle span { font-size: 12px; font-weight: 750; }
@@ -219,4 +225,6 @@
   .candidateTable > div { grid-template-columns: 22px 1fr 42px; }
   .candidateTable code { grid-column: 2 / -1; }
   .candidateTable small { grid-column: 2 / -1; }
+  .eventTimeline .debugBlock > summary { grid-template-columns: 1fr auto; }
+  .eventTimeline summary time { grid-column: 1 / -1; }
 }

@@ -19,7 +19,16 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import type { Intent, RiskLevel, TraceDebugContext, TraceRecord, TraceSource, TraceStage } from "@/lib/contracts";
+import type {
+  Intent,
+  RiskLevel,
+  TraceDebugContext,
+  TraceEvent,
+  TraceEventType,
+  TraceSource,
+  TraceStage,
+} from "@/lib/contracts";
+import type { TraceEventStatus, TraceView } from "@/lib/trace-store";
 
 import styles from "./trace.module.css";
 
@@ -48,6 +57,17 @@ const sourceLabels: Record<TraceSource["type"], string> = {
   rule: "安全规则",
 };
 
+const eventTypeLabels: Record<TraceEventType, string> = {
+  model: "模型",
+  route: "路由",
+  rag: "RAG",
+  tool: "工具",
+  rule: "规则",
+  confirmation: "确认",
+  output: "输出",
+  error: "错误",
+};
+
 function getIntentLabel(intent: string) {
   return intentLabels[intent as Intent] ?? "历史意图";
 }
@@ -64,11 +84,15 @@ function formatTime(value: string) {
 }
 
 export default function TracePage() {
-  const [records, setRecords] = useState<TraceRecord[]>([]);
+  const [records, setRecords] = useState<TraceView[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [query, setQuery] = useState("");
   const [intent, setIntent] = useState<Intent | "all">("all");
   const [risk, setRisk] = useState<RiskLevel | "all">("all");
+  const [eventType, setEventType] = useState<TraceEventType | "all">("all");
+  const [eventStatus, setEventStatus] = useState<TraceEventStatus | "all">("all");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -77,10 +101,11 @@ export default function TracePage() {
     try {
       const response = await fetch("/api/trace", { cache: "no-store" });
       if (!response.ok) throw new Error("加载失败");
-      const data = (await response.json()) as { records: TraceRecord[] };
+      const data = (await response.json()) as { records: TraceView[] };
       const next = [...data.records].reverse();
       setRecords(next);
-      setSelectedId((current) => current || next[0]?.traceId || "");
+      const linkedTraceId = new URLSearchParams(window.location.search).get("traceId") ?? "";
+      setSelectedId((current) => current || (next.some((record) => record.traceId === linkedTraceId) ? linkedTraceId : next[0]?.traceId) || "");
     } catch {
       setError("Trace 暂时无法读取，请确认本地服务仍在运行。");
     } finally {
@@ -99,6 +124,14 @@ export default function TracePage() {
     return records.filter((record) => {
       const matchesIntent = intent === "all" || record.intent === intent;
       const matchesRisk = risk === "all" || record.riskLevel === risk;
+      const matchesEventType = eventType === "all" || record.events.some((event) => event.type === eventType);
+      const matchesEventStatus = eventStatus === "all" || record.events.some((event) => event.status === eventStatus);
+      const fromTime = from ? Date.parse(from) : Number.NEGATIVE_INFINITY;
+      const toTime = to ? Date.parse(to) : Number.POSITIVE_INFINITY;
+      const matchesTime = record.events.some((event) => {
+        const eventTime = Date.parse(event.createdAt);
+        return eventTime >= fromTime && eventTime <= toTime;
+      });
       const text = [
         record.traceId,
         record.sessionId,
@@ -109,9 +142,9 @@ export default function TracePage() {
         record.route?.action,
         ...record.sources.flatMap((source) => [source.sourceSystem, source.recordId]),
       ].join(" ").toLowerCase();
-      return matchesIntent && matchesRisk && (!keyword || text.includes(keyword));
+      return matchesIntent && matchesRisk && matchesEventType && matchesEventStatus && matchesTime && (!keyword || text.includes(keyword));
     });
-  }, [intent, query, records, risk]);
+  }, [eventStatus, eventType, from, intent, query, records, risk, to]);
 
   useEffect(() => {
     if (filtered.length && !filtered.some((record) => record.traceId === selectedId)) {
@@ -184,6 +217,19 @@ export default function TracePage() {
             <option value="medium">需确认</option>
             <option value="high">高风险</option>
           </select>
+          <select aria-label="按事件类型筛选" value={eventType} onChange={(event) => setEventType(event.target.value as TraceEventType | "all")}>
+            <option value="all">全部事件</option>
+            {Object.entries(eventTypeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </select>
+          <select aria-label="按事件状态筛选" value={eventStatus} onChange={(event) => setEventStatus(event.target.value as TraceEventStatus | "all")}>
+            <option value="all">全部状态</option>
+            <option value="started">已开始</option>
+            <option value="completed">已完成</option>
+            <option value="failed">失败</option>
+            <option value="skipped">已跳过</option>
+          </select>
+          <input aria-label="起始时间" type="datetime-local" value={from} onChange={(event) => setFrom(event.target.value)} />
+          <input aria-label="结束时间" type="datetime-local" value={to} onChange={(event) => setTo(event.target.value)} />
           <button className={styles.clear} onClick={() => void clearAll()} disabled={!records.length}><Trash2 size={15} />清空 Mock Trace</button>
         </div>
 
@@ -228,7 +274,7 @@ function Stat({ icon, label, value, danger = false }: { icon: React.ReactNode; l
   return <div className={`${styles.stat} ${danger ? styles.statDanger : ""}`}><span>{icon}</span><div><strong>{value}</strong><small>{label}</small></div></div>;
 }
 
-function TraceDetail({ record }: { record: TraceRecord }) {
+function TraceDetail({ record }: { record: TraceView }) {
   const stages = record.stages?.length ? record.stages : record.steps.map((step, index) => ({
     id: `legacy-${index}`,
     title: step,
@@ -272,6 +318,12 @@ function TraceDetail({ record }: { record: TraceRecord }) {
       {record.debug && <DebugContextPanel debug={record.debug} />}
 
       <section className={styles.detailSection}>
+        <div className={styles.sectionTitle}><span>统一 TraceEvent</span><small>{record.events.length} 个事件 · 单一 Trace ID</small></div>
+        <div className={styles.traceNotice}><ShieldCheck size={14} /><span>模型、路由、RAG、工具、规则、确认、输出与错误按统一事件契约排序；载荷在写入和查询时均执行脱敏。</span></div>
+        <TraceEventTimeline events={record.events} />
+      </section>
+
+      <section className={styles.detailSection}>
         <div className={styles.sectionTitle}><span>详细执行过程</span><small>{stages.length} 阶段 · {(totalDurationMs / 1000).toFixed(2)}s</small></div>
         <div className={styles.traceNotice}><ShieldCheck size={14} /><span>以下阶段保留完整的可审计执行摘要、规则命中和脱敏工具入参 / 出参；消费者端仅接收对应的精简进度。</span></div>
         <ExecutionTimeline stages={stages} />
@@ -287,6 +339,23 @@ function TraceDetail({ record }: { record: TraceRecord }) {
           <div className={styles.noSources}>本次仅执行意图识别与引导话术，没有读取知识库或业务系统。</div>
         )}
       </section>
+    </div>
+  );
+}
+
+function TraceEventTimeline({ events }: { events: TraceEvent[] }) {
+  return (
+    <div className={styles.eventTimeline}>
+      {events.map((event) => (
+        <details key={event.eventId} className={styles.debugBlock}>
+          <summary>
+            <span>{String(event.sequence).padStart(2, "0")} · {eventTypeLabels[event.type]}</span>
+            <code>{event.status}</code>
+            <time>{formatTime(event.createdAt)}</time>
+          </summary>
+          <pre>{JSON.stringify(event.payload, null, 2)}</pre>
+        </details>
+      ))}
     </div>
   );
 }
