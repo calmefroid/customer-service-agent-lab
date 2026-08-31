@@ -9,3 +9,7 @@ The knowledge module deliberately uses no vector database. Retrieval is stable a
 5. On `conflict`, select no article. On `hit`, adopt only the highest eligible candidate and emit its article ID, version, reason, and citation excerpt.
 
 Preview mode may include the currently selected working copy. Published mode only receives immutable published snapshots, so saving an edit cannot change consumer retrieval before publishing.
+
+## Fixed Evals sandbox scenarios
+
+`sandbox-scenarios.ts` exports isolated `knowledge_conflict` and `knowledge_expired` fixtures. They use a fixed effective clock and never join the default article index. The adapter's `knowledgeSandbox.activate(...)` is the only stateful trigger; `knowledgeSandbox.clear()` or `resetKnowledgeStore()` restores default behavior. The fixed-Evals runner must activate a scenario before orchestration and clear it in `finally`.

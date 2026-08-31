@@ -4,8 +4,20 @@ import type {
   KnowledgeTopic,
   TraceSource,
 } from "@/lib/contracts";
-import { getPublishedKnowledgeByTopic, retrievePublishedKnowledge } from "@/lib/knowledge-store";
+import {
+  activateKnowledgeSandboxScenario,
+  clearKnowledgeSandboxScenario,
+  getActiveKnowledgeSandboxScenario,
+  getPublishedKnowledgeByTopic,
+  retrievePublishedKnowledge,
+} from "@/lib/knowledge-store";
 import type { KnowledgeSearchFilters } from "@/lib/rag/types";
+export {
+  KNOWLEDGE_SANDBOX_EFFECTIVE_AT,
+  KNOWLEDGE_SANDBOX_SCENARIOS,
+  retrieveKnowledgeSandboxScenario,
+  type KnowledgeSandboxScenario,
+} from "@/lib/rag/sandbox-scenarios";
 
 export interface KnowledgeRetrieval {
   article: KnowledgeArticle;
@@ -41,6 +53,13 @@ export async function retrieveKnowledgeByQuery(
 ): Promise<KnowledgeRetrievalResult> {
   return retrievePublishedKnowledge(query, filters).retrieval;
 }
+
+/** Scenario control surface for the sequential fixed-Evals runner. */
+export const knowledgeSandbox = {
+  activate: activateKnowledgeSandboxScenario,
+  clear: clearKnowledgeSandboxScenario,
+  getActive: getActiveKnowledgeSandboxScenario,
+} as const;
 
 export async function searchKnowledge(topic: KnowledgeTopic): Promise<TraceSource> {
   return (await findKnowledge(topic))?.source ?? {

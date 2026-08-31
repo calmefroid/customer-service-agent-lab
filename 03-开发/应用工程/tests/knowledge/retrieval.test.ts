@@ -1,12 +1,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { retrieveKnowledgeByQuery } from "@/lib/adapters/knowledge-mock-adapter";
 import {
-  createKnowledgeArticle,
-  publishKnowledgeArticle,
+  findKnowledge,
+  knowledgeSandbox,
+  retrieveKnowledgeByQuery,
+  retrieveKnowledgeSandboxScenario,
+} from "@/lib/adapters/knowledge-mock-adapter";
+import {
   resetKnowledgeStore,
   retrievePublishedKnowledge,
-  updateKnowledgeArticle,
 } from "@/lib/knowledge-store";
 
 const EFFECTIVE_AT = "2026-08-24T10:00:00+08:00";
@@ -45,44 +47,51 @@ describe("deterministic knowledge retrieval", () => {
     expect(result.retrieval.citations).toEqual([]);
   });
 
-  it("相关知识过期时返回 expired，不生成业务结论", () => {
-    updateKnowledgeArticle("KB-AFTERSALE-WARRANTY-003", { effectiveTo: "2026-08-23T23:59:59+08:00" });
-    publishKnowledgeArticle("KB-AFTERSALE-WARRANTY-003");
-    const result = retrievePublishedKnowledge("产品质保多久维修收费吗", { effectiveAt: EFFECTIVE_AT });
-    expect(result.retrieval.status).toBe("expired");
-    expect(result.retrieval.selectedArticleIds).toEqual([]);
-    expect(result.candidates.find((candidate) => candidate.articleId === "KB-AFTERSALE-WARRANTY-003")?.filterReasons[0]).toContain("已失效");
+  it("显式 expired Sandbox 场景保留候选与时间过滤原因且不生成引用", async () => {
+    knowledgeSandbox.activate("knowledge_expired");
+    const result = await retrieveKnowledgeByQuery("请按已过期的换新政策处理");
+    expect(result.status).toBe("expired");
+    expect(result.selectedArticleIds).toEqual([]);
+    expect(result.citations).toEqual([]);
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]).toMatchObject({
+      articleId: "KB-SANDBOX-EXPIRED-REPLACEMENT-01",
+      adopted: false,
+      filterReasons: [expect.stringContaining("已失效")],
+    });
+    expect(await findKnowledge("warranty")).toBeUndefined();
   });
 
-  it("同主题高分知识给出矛盾事实时返回 conflict 且不自动选边", () => {
-    const base = {
-      title: "智能灯具质保期限",
-      question: "智能灯具质保期限是几年",
-      answerItems: ["以发布政策为准"],
-      topic: "warranty" as const,
-      productScope: "智能灯具",
-      channelScope: "线上商城",
-      regionScope: "中国大陆",
-      effectiveFrom: "2026-08-01T00:00:00+08:00",
-      source: "测试政策",
-      maintainer: "测试运营",
-      tags: ["智能灯具", "质保期限", "几年"],
-    };
-    const first = createKnowledgeArticle({ ...base, answer: "智能灯具质保期限为 1 年。" });
-    const second = createKnowledgeArticle({ ...base, answer: "智能灯具质保期限为 3 年。" });
-    publishKnowledgeArticle(first.id);
-    publishKnowledgeArticle(second.id);
+  it("显式 conflict Sandbox 场景返回冲突条目与原因且不自动选边", async () => {
+    knowledgeSandbox.activate("knowledge_conflict");
+    const result = await retrieveKnowledgeByQuery("两条质保规则冲突时按哪条？");
+    expect(result.status).toBe("conflict");
+    expect(result.selectedArticleIds).toEqual([]);
+    expect(result.citations).toEqual([]);
+    expect(result.candidates.every((candidate) => candidate.adopted === false)).toBe(true);
+    expect(result.conflicts).toEqual([{
+      articleIds: ["KB-SANDBOX-CONFLICT-WARRANTY-01", "KB-SANDBOX-CONFLICT-WARRANTY-02"],
+      reason: expect.stringContaining("不一致事实"),
+    }]);
+    expect(await findKnowledge("warranty")).toBeUndefined();
+  });
 
-    const result = retrievePublishedKnowledge("智能灯具质保期限是几年", {
-      productCategory: "智能灯具",
-      channel: "线上商城",
-      region: "中国大陆",
-      effectiveAt: EFFECTIVE_AT,
-    });
-    expect(result.retrieval.status).toBe("conflict");
-    expect(result.retrieval.selectedArticleIds).toEqual([]);
-    expect(result.retrieval.citations).toEqual([]);
-    expect(result.retrieval.conflicts[0].articleIds).toEqual(expect.arrayContaining([first.id, second.id]));
+  it("Sandbox 场景结果可重复，且清理后恢复完全相同的默认检索", () => {
+    const query = "两条质保规则冲突时按哪条？";
+    const defaultBefore = retrievePublishedKnowledge(query, { effectiveAt: EFFECTIVE_AT }).retrieval;
+    expect(defaultBefore.status).not.toBe("conflict");
+
+    const first = retrieveKnowledgeSandboxScenario("knowledge_conflict", query).retrieval;
+    const second = retrieveKnowledgeSandboxScenario("knowledge_conflict", query).retrieval;
+    expect(second).toEqual(first);
+
+    knowledgeSandbox.activate("knowledge_conflict");
+    expect(retrievePublishedKnowledge(query).retrieval.status).toBe("conflict");
+    expect(knowledgeSandbox.getActive()).toBe("knowledge_conflict");
+    resetKnowledgeStore();
+    expect(knowledgeSandbox.getActive()).toBeUndefined();
+    const defaultAfter = retrievePublishedKnowledge(query, { effectiveAt: EFFECTIVE_AT }).retrieval;
+    expect({ ...defaultAfter, durationMs: 0 }).toEqual({ ...defaultBefore, durationMs: 0 });
   });
 
   it("结果可直接序列化为 TraceEvent 的 rag payload，重复检索分数稳定", async () => {
