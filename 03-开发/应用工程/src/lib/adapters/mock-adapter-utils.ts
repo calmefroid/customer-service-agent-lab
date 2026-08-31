@@ -47,6 +47,19 @@ export async function executeMock<T>(
   return { status: "success", data: result.data, meta: baseMeta(result.records) };
 }
 
+/**
+ * Short-circuits write adapters before validation or ID allocation when a
+ * deterministic failure has been requested. Callers can then prove that an
+ * injected failure never enters the Store mutation callback.
+ */
+export function executeInjectedFailure<T>(
+  sourceSystem: BusinessSourceSystem,
+  options: AdapterCallOptions | undefined,
+): Promise<ToolResult<T>> | null {
+  if (!options?.outcome || options.outcome === "success") return null;
+  return executeMock<T>(sourceSystem, options, () => null);
+}
+
 export function businessError<T>(
   sourceSystem: BusinessSourceSystem,
   code: ToolError["code"],

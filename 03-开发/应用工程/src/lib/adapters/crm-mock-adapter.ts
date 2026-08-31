@@ -4,7 +4,7 @@ import type {
   ReturnExchangeRecord,
   ServiceTicketRecord,
 } from "@/lib/domain/business";
-import { businessError, executeMock } from "@/lib/adapters/mock-adapter-utils";
+import { businessError, executeInjectedFailure, executeMock } from "@/lib/adapters/mock-adapter-utils";
 import { businessStore } from "@/lib/stores/business/business-store";
 
 export class CrmMockAdapter implements CustomerRelationshipAdapter {
@@ -14,6 +14,9 @@ export class CrmMockAdapter implements CustomerRelationshipAdapter {
     idempotencyKey: string,
     options?: Parameters<CustomerRelationshipAdapter["createReturnExchange"]>[3],
   ) {
+    const injectedFailure = executeInjectedFailure<ReturnExchangeRecord>("CRM", options);
+    if (injectedFailure) return injectedFailure;
+
     const order = businessStore.getOrder(draft.orderId);
     if (!order) return Promise.resolve(businessError<ReturnExchangeRecord>("CRM", "NOT_FOUND", "退换所属订单不存在"));
     if (!draft.reason || !draft.itemCondition || !draft.contactPhone || !draft.pickupAddress) {
@@ -46,6 +49,9 @@ export class CrmMockAdapter implements CustomerRelationshipAdapter {
     idempotencyKey: string,
     options?: Parameters<CustomerRelationshipAdapter["createServiceTicket"]>[4],
   ) {
+    const injectedFailure = executeInjectedFailure<ServiceTicketRecord>("CRM", options);
+    if (injectedFailure) return injectedFailure;
+
     if (!draft.product || !draft.issueDescription || !draft.contactPhone || !draft.serviceAddress) {
       return Promise.resolve(businessError<ServiceTicketRecord>("CRM", "INVALID_INPUT", "服务工单缺少必填字段"));
     }

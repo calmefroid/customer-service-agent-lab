@@ -41,3 +41,12 @@
 | `system_error` | `SYSTEM_FAILURE` | 是 | 否 | 模拟来源系统不可用 |
 
 参数、身份、记录和确认协议检查另使用 `INVALID_INPUT`、`UNAUTHORIZED`、`NOT_FOUND` 和 `BUSINESS_REJECTED`。所有结果都包含 `requestId`、`sourceSystem`、`adapterType`、`recordId`、`sourceUpdatedAt`、耗时和尝试次数。
+
+确定性 bad case 注入直接传入 `AdapterCallOptions.outcome`，不依赖 Eval 案例 ID 或用户文本：
+
+- OMS 空结果：`getLatestOrder(customerId, { outcome: "empty" })`
+- TMS 超时：`getShipment(orderId, { outcome: "timeout" })`
+- CRM 退换业务拒绝：`createReturnExchange(..., { outcome: "business_error" })`
+- CRM 工单系统失败：`createServiceTicket(..., { outcome: "system_error" })`
+
+对 CRM 写 Adapter，显式失败注入优先于参数校验和编号分配；失败时不进入 Store 回调。未传 `outcome` 或显式传入 `success` 时，保持原默认成功语义。
