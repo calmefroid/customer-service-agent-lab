@@ -182,7 +182,9 @@ export default function TracePage() {
           </div>
         </div>
         <div className={styles.headerActions}>
+          <a href="/ops">运营台</a>
           <a href="/knowledge">知识库管理</a>
+          <a href="/evals">Evals</a>
           <a href="/" target="_blank" rel="noreferrer">打开消费者端</a>
           <button onClick={() => void load()} disabled={loading}><RefreshCw size={15} />刷新</button>
         </div>

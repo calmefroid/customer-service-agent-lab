@@ -29,6 +29,8 @@ import type {
   ConfirmationResolution,
   ConfirmedWrite,
   LogisticsUrgeDraft,
+  OrderCancelDraft,
+  OrderChangeDraft,
   ReturnExchangeDraft,
   ServiceTicketDraft,
   WorkflowContext,
@@ -117,7 +119,7 @@ function toolFailure(result: { error: { code: string; message: string } }): neve
 }
 
 function confirmationIntent(operation: ConfirmationOperation): Intent {
-  if (operation === "logistics_urge") return "logistics_query";
+  if (operation === "logistics_urge" || operation === "order_change" || operation === "order_cancel") return "logistics_query";
   if (operation === "return_exchange_create") return "return_exchange";
   if (operation === "service_ticket_create") return "service_ticket_create";
   return "other";
@@ -127,6 +129,8 @@ function confirmationRoute(operation: ConfirmationOperation, action: "confirm" |
   const intent = confirmationIntent(operation);
   const module: RouteDecision["module"] = operation === "logistics_urge"
     ? "logistics"
+    : operation === "order_change" || operation === "order_cancel"
+      ? "logistics"
     : operation === "return_exchange_create"
       ? "return"
       : operation === "service_ticket_create" ? "repair" : "conversation";
@@ -137,7 +141,9 @@ function confirmationRoute(operation: ConfirmationOperation, action: "confirm" |
       ? "logistics.urge"
       : operation === "return_exchange_create"
         ? "return.request"
-        : operation === "service_ticket_create" ? "after_sales.repair_process" : "order.change",
+        : operation === "service_ticket_create"
+          ? "after_sales.repair_process"
+          : operation === "order_cancel" ? "order.cancel" : "order.change",
     action: `resolve_confirmation:${action}`,
     confidence: 1,
     needsClarification: false,
@@ -173,6 +179,27 @@ function publicConfirmationError(
     message: messages[internalCode] ?? result.error.message,
     retryable: result.error.retryable,
   }, internalCode);
+}
+
+function publicToolError(
+  result: { error: { code: string; message: string; retryable: boolean } },
+  fallbackMessage: string,
+): AgentWorkflowError {
+  const messages: Record<string, string> = {
+    EMPTY_RESULT: fallbackMessage,
+    TIMEOUT: "业务系统暂时没有响应，请稍后重试。",
+    BUSINESS_REJECTED: result.error.message,
+    INVALID_INPUT: result.error.message,
+    NOT_FOUND: fallbackMessage,
+    UNAUTHORIZED: "当前账号无权查看或操作这条记录。",
+    SYSTEM_FAILURE: "业务系统暂时不可用，请稍后重试。",
+    CANCELLED: "已停止生成。",
+  };
+  return new AgentWorkflowError({
+    code: result.error.code,
+    message: messages[result.error.code] ?? fallbackMessage,
+    retryable: result.error.retryable,
+  }, result.error.code);
 }
 
 function traceableStoredRequest(confirmationRequestId: string): ConfirmationRequest | undefined {
@@ -330,6 +357,62 @@ async function prepareIntegratedServiceTicket(
   return result;
 }
 
+async function prepareIntegratedOrderOperation(
+  request: ChatRequest,
+  operation: "order_change" | "order_cancel",
+) {
+  const context = workflowContext(request);
+  const candidate = await businessWorkflowService.queryOrderOperationCandidate(context);
+  if (candidate.status !== "success") {
+    throw publicToolError(candidate, "当前账号下没有可变更或取消的订单。请检查订单状态后再试。");
+  }
+  const draft: OrderChangeDraft | OrderCancelDraft = operation === "order_change"
+    ? {
+        orderId: candidate.data.orderId,
+        deliveryAddress: candidate.data.deliveryAddress,
+        contactPhone: candidate.data.contactPhone,
+      }
+    : {
+        orderId: candidate.data.orderId,
+        reason: "用户申请取消订单",
+      };
+  const prepared = operation === "order_change"
+    ? await businessWorkflowService.prepareOrderChange(context, draft as OrderChangeDraft)
+    : await businessWorkflowService.prepareOrderCancel(context, draft as OrderCancelDraft);
+  if (prepared.status !== "success") {
+    throw publicToolError(prepared, "当前订单状态不支持这项操作。请刷新订单后再试。");
+  }
+  appendConfirmationTrace(request, prepared.data as ConfirmationRequest, "started");
+  return {
+    confirmation: prepared.data,
+    order: candidate.data,
+    sources: traceSources(candidate.meta.sources),
+  };
+}
+
+async function queryIntegratedReturnStatus(request: ChatRequest) {
+  const result = await businessWorkflowService.queryReturnExchangeStatus(workflowContext(request));
+  if (result.status !== "success") {
+    throw publicToolError(result, "当前账号下还没有可查询的退换申请。完成申请后可在这里查看进度。");
+  }
+  return {
+    request: {
+      requestNo: result.data.requestNo,
+      orderId: result.data.orderId,
+      serviceType: result.data.serviceType === "return" ? "退货" as const : "换货" as const,
+      product: result.data.product,
+      status: result.data.status,
+      updatedAt: result.data.updatedAt,
+      events: result.data.events.map((event, index, events) => ({
+        time: event.occurredAt,
+        text: event.description,
+        ...(index === events.length - 1 ? { active: true } : {}),
+      })),
+    },
+    sources: traceSources(result.meta.sources),
+  };
+}
+
 function confirmationRecordUi(operation: ConfirmationOperation, record: BusinessWriteRecord): ChatResponse["ui"] {
   if (operation === "logistics_urge" && typeof record.urgeRequestNo === "string") {
     return {
@@ -347,6 +430,38 @@ function confirmationRecordUi(operation: ConfirmationOperation, record: Business
       kind: "service_ticket_success",
       ticketNo: record.ticketNo,
       serviceType: record.serviceType === "installation" ? "安装服务" : "维修服务",
+    };
+  }
+  if (
+    operation === "order_change"
+    && typeof record.changeRequestNo === "string"
+    && typeof record.orderId === "string"
+    && typeof record.status === "string"
+  ) {
+    return {
+      kind: "order_operation_success",
+      result: {
+        operation,
+        orderId: record.orderId,
+        requestNo: record.changeRequestNo,
+        status: record.status,
+      },
+    };
+  }
+  if (
+    operation === "order_cancel"
+    && typeof record.cancelRequestNo === "string"
+    && typeof record.orderId === "string"
+    && typeof record.status === "string"
+  ) {
+    return {
+      kind: "order_operation_success",
+      result: {
+        operation,
+        orderId: record.orderId,
+        requestNo: record.cancelRequestNo,
+        status: record.status,
+      },
     };
   }
   return undefined;
@@ -493,13 +608,18 @@ function detectIntent(message: string, request: ChatRequest): Intent {
   if (
     request.action === "confirm_identity" ||
     request.action === "prepare_logistics_urge" ||
-    request.action === "submit_logistics_urge"
+    request.action === "submit_logistics_urge" ||
+    request.action === "prepare_order_change" ||
+    request.action === "prepare_order_cancel"
   ) return "logistics_query";
+  if (request.action === "confirm_return_identity") return "return_exchange";
   if (safetyPattern.test(message) || requestedHumanPattern.test(message) || disputePattern.test(message)) return "human_escalation";
   if (/^(你好|您好|在吗|谢谢|感谢|辛苦了|再见)[！!。,.， ]*$/.test(message.trim())) return "smalltalk";
   if (request.attachment && request.module !== "repair") return "return_exchange";
   if (/报修进度|服务进度|工单进度|报修到哪|维修到哪|安装预约到哪/.test(message)) return "service_ticket_query";
   if (/预约.*安装|上门安装|安装师傅/.test(message)) return "service_ticket_create";
+  if (/退货申请|换货申请|退换申请/.test(message) && /进度|状态|到哪|处理/.test(message)) return "return_exchange";
+  if (/取消.*订单|订单.*取消|订单.*地址|收货地址/.test(message)) return "logistics_query";
   if (/物流|到哪|发货|快递|订单/.test(message)) return "logistics_query";
   if (/破|碎|退货|换货|少件|错发/.test(message)) return "return_exchange";
   if (/配网|连不上|搜不到设备|绑定不了|语音控制|小爱|小度|天猫精灵/.test(message)) return "troubleshooting";
@@ -535,13 +655,27 @@ function buildRouteDecision(request: ChatRequest, intent: Intent): RouteDecision
 
   if (intent === "logistics_query") {
     module = "logistics";
-    topic = request.action?.includes("urge") || /催/.test(message) ? "logistics.urge" : /电话|联系/.test(message) ? "logistics.contact" : "logistics.status";
-    action = request.action ?? "confirm_identity_then_query";
-    requiresConfirmation = request.action === "submit_logistics_urge" || request.action === "prepare_logistics_urge";
+    const orderCancel = request.action === "prepare_order_cancel" || /取消.*订单|订单.*取消/.test(message);
+    const orderChange = request.action === "prepare_order_change" || /订单.*地址|收货地址/.test(message);
+    topic = orderCancel
+      ? "order.cancel"
+      : orderChange
+        ? "order.change"
+        : request.action?.includes("urge") || /催/.test(message) ? "logistics.urge" : /电话|联系/.test(message) ? "logistics.contact" : "logistics.status";
+    action = request.action
+      ?? (orderCancel
+        ? "confirm_identity_then_prepare_order_cancel"
+        : orderChange ? "confirm_identity_then_prepare_order_change" : "confirm_identity_then_query");
+    requiresConfirmation = request.action === "submit_logistics_urge"
+      || request.action === "prepare_logistics_urge"
+      || orderCancel
+      || orderChange;
   } else if (intent === "return_exchange") {
     module = "return";
-    topic = request.attachment ? "return.arrival_damage" : /少件/.test(message) ? "return.missing_item" : /错发/.test(message) ? "return.wrong_item" : "return.request";
-    action = request.action ?? (request.attachment ? "analyze_image_then_prepare_return" : "collect_return_information");
+    const returnStatus = request.action === "confirm_return_identity"
+      || /退货申请|换货申请|退换申请/.test(message) && /进度|状态|到哪|处理/.test(message);
+    topic = returnStatus ? "return.status" : request.attachment ? "return.arrival_damage" : /少件/.test(message) ? "return.missing_item" : /错发/.test(message) ? "return.wrong_item" : "return.request";
+    action = request.action ?? (returnStatus ? "confirm_identity_then_query_return" : request.attachment ? "analyze_image_then_prepare_return" : "collect_return_information");
     requiresConfirmation = request.action === "submit_return";
   } else if (intent === "troubleshooting") {
     module = "repair";
@@ -786,6 +920,123 @@ export async function orchestrateMock(
     );
   }
   const intent = options.route?.intent ?? detectIntent(request.message, request);
+  const selectedRoute = options.route ?? buildRouteDecision(request, intent);
+  routeOverrides.set(request, selectedRoute);
+
+  if (
+    selectedRoute.action === "confirm_identity_then_prepare_order_change"
+    || selectedRoute.action === "confirm_identity_then_prepare_order_cancel"
+  ) {
+    const operation = selectedRoute.action.endsWith("order_change") ? "order_change" : "order_cancel";
+    const message = operation === "order_change"
+      ? "修改收货地址需要先确认当前账号身份。确认后我会读取可变更订单，并生成一份可编辑草稿。"
+      : "取消订单需要先确认当前账号身份。确认后我会读取可取消订单，并生成一份待确认申请。";
+    return {
+      message,
+      intent: "logistics_query",
+      riskLevel: "medium",
+      traceId: createTrace(
+        request,
+        "logistics_query",
+        "medium",
+        message,
+        ["识别订单写操作", "执行隐私校验", "等待身份确认"],
+        [],
+      ),
+      ui: {
+        kind: "identity_confirm",
+        maskedPhone: "尾号 6821",
+        purpose: operation,
+      },
+    };
+  }
+
+  if (selectedRoute.action === "confirm_identity_then_query_return") {
+    const message = "退换申请进度仅对本人开放，请先确认使用当前账号查询。";
+    return {
+      message,
+      intent: "return_exchange",
+      riskLevel: "medium",
+      traceId: createTrace(
+        request,
+        "return_exchange",
+        "medium",
+        message,
+        ["识别退换进度查询", "执行隐私校验", "等待身份确认"],
+        [],
+      ),
+      ui: { kind: "identity_confirm", maskedPhone: "尾号 6821", purpose: "return" },
+    };
+  }
+
+  if (request.action === "prepare_order_change" || request.action === "prepare_order_cancel") {
+    const operation = request.action === "prepare_order_change" ? "order_change" : "order_cancel";
+    const prepared = await prepareIntegratedOrderOperation(request, operation);
+    const message = operation === "order_change"
+      ? "已找到当前可变更订单。请核对并编辑收货地址或联系电话，确认后提交变更申请。"
+      : "已找到当前可取消订单。请核对订单和取消原因，确认后提交取消申请。";
+    return {
+      message,
+      intent: "logistics_query",
+      riskLevel: "medium",
+      traceId: createTrace(
+        request,
+        "logistics_query",
+        "medium",
+        message,
+        ["确认演示身份", "查询 OMS 可操作订单", "生成正式确认草稿", "等待用户确认"],
+        prepared.sources,
+        [
+          decisionStage("identity", "确认订单操作权限", "用户已确认当前演示账号，允许查询本人可操作订单。", 12, "guardrail"),
+          toolStage("oms", "查询 OMS 可操作订单", "只返回当前账号最近一笔仍允许变更或取消的订单。", 36, {
+            system: "OMS",
+            toolName: "get_latest_mutable_order",
+            operation: operation === "order_change" ? "查询可变更订单" : "查询可取消订单",
+            method: "GET",
+            endpoint: "/mock/oms/orders/latest-mutable",
+            input: { customer_scope: "current_user", allowed_statuses: ["created", "paid", "allocated"] },
+            output: { order_id: prepared.order.orderId, order_status: prepared.order.status },
+            statusCode: 200,
+          }),
+          decisionStage("confirm", "签发正式确认草稿", "operation、令牌与幂等键均由服务端 Confirmation Store 签发；此时尚未执行写工具。", 15, "output"),
+        ],
+      ),
+      ui: { kind: "confirmation", request: prepared.confirmation },
+    };
+  }
+
+  if (request.action === "confirm_return_identity") {
+    const result = await queryIntegratedReturnStatus(request);
+    const message = `已找到退换申请 ${result.request.requestNo}，当前状态为${result.request.status}。`;
+    return {
+      message,
+      intent: "return_exchange",
+      riskLevel: "low",
+      traceId: createTrace(
+        request,
+        "return_exchange",
+        "low",
+        message,
+        ["确认演示身份", "查询 CRM 退换申请", "返回申请进度"],
+        result.sources,
+        [
+          decisionStage("identity", "确认退换查询权限", "用户已确认当前演示账号，只查询该账号的退换申请。", 12, "guardrail"),
+          toolStage("crm", "查询 CRM 退换申请进度", "返回当前账号最近更新的退换申请与公开状态时间线。", 34, {
+            system: "CRM",
+            toolName: "get_return_exchange_status",
+            operation: "查询退换申请进度",
+            method: "GET",
+            endpoint: "/mock/crm/return-requests/latest",
+            input: { customer_scope: "current_user" },
+            output: { request_no: result.request.requestNo, status: result.request.status },
+            statusCode: 200,
+          }),
+          decisionStage("output", "返回退换进度", "仅展示当前账号申请的公开字段和状态时间线。", 9, "output"),
+        ],
+      ),
+      ui: { kind: "return_status", request: result.request },
+    };
+  }
 
   if (intent === "logistics_query" && request.action !== "confirm_identity") {
     if (request.action === "prepare_logistics_urge") {

@@ -177,6 +177,7 @@ export default function OperationsPage() {
         <nav className={styles.headerActions}>
           <a href="/knowledge">知识库</a>
           <a href="/trace">Trace 控制台</a>
+          <a href="/evals">Evals</a>
           <a href="/" target="_blank" rel="noreferrer"><Bot size={14} />消费者端</a>
         </nav>
       </header>

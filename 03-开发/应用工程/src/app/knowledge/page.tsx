@@ -281,7 +281,9 @@ export default function KnowledgePage() {
           <div><strong>智享家客服控制台</strong><small>Knowledge Workspace · Mock</small></div>
         </div>
         <nav className={styles.headerActions}>
+          <a href="/ops">运营台</a>
           <a href="/trace">执行 Trace</a>
+          <a href="/evals">Evals</a>
           <a href="/" target="_blank" rel="noreferrer"><Bot size={14} />消费者端</a>
         </nav>
       </header>

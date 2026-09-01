@@ -171,6 +171,7 @@ export default function EvalsPage() {
           <div><strong>售后 Agent · Evals</strong><small>固定案例 · 确定性 Grader · Sandbox</small></div>
         </div>
         <nav className={styles.headerActions}>
+          <a href="/ops">运营台</a>
           <a href="/trace">Trace 控制台</a>
           <a href="/knowledge">知识库</a>
           <a href="/" target="_blank" rel="noreferrer">消费者端 <ArrowUpRight size={13} /></a>
