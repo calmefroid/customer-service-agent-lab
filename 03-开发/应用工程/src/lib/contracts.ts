@@ -118,6 +118,9 @@ export interface ChatRequest {
     | "prepare_service_ticket"
     | "submit_service_ticket"
     | "confirm_service_identity"
+    | "prepare_order_change"
+    | "prepare_order_cancel"
+    | "confirm_return_identity"
     | "select_repair";
   attachment?: AttachmentMeta;
   formData?: ReturnFormData;
@@ -162,14 +165,37 @@ export interface ServiceTicketView {
   events: LogisticsEvent[];
 }
 
+export interface OrderOperationResultView {
+  operation: "order_change" | "order_cancel";
+  orderId: string;
+  requestNo: string;
+  status: string;
+}
+
+export interface ReturnExchangeStatusView {
+  requestNo: string;
+  orderId: string;
+  serviceType: ReturnFormData["serviceType"];
+  product: string;
+  status: string;
+  updatedAt: string;
+  events: LogisticsEvent[];
+}
+
 export type ChatUi =
   | { kind: "product"; product: ProductView }
-  | { kind: "identity_confirm"; maskedPhone: string; purpose: "order" | "service" }
+  | {
+      kind: "identity_confirm";
+      maskedPhone: string;
+      purpose: "order" | "service" | "order_change" | "order_cancel" | "return";
+    }
   | { kind: "order"; order: OrderView }
+  | { kind: "order_operation_success"; result: OrderOperationResultView }
   | { kind: "safety"; priority: "urgent" }
   | { kind: "upload_prompt" }
   | { kind: "return_confirm"; form: ReturnFormData }
   | { kind: "return_success"; requestNo: string }
+  | { kind: "return_status"; request: ReturnExchangeStatusView }
   | { kind: "troubleshooting"; title: string; steps: string[]; note: string; reportedIssue: string }
   | { kind: "service_ticket_form"; form: ServiceTicketFormData }
   | { kind: "service_ticket_success"; ticketNo: string; serviceType: ServiceTicketFormData["serviceType"] }
