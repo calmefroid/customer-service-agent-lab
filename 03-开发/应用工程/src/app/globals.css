@@ -201,6 +201,7 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .pending-copy { min-width: 0; flex: 1; }
 .pending-copy strong { display: block; overflow: hidden; font-size: 11px; white-space: nowrap; text-overflow: ellipsis; }
 .pending-copy span { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; }
+.pending-file.reading .pending-copy span { color: var(--brand-dark); }
 .pending-file button { width: 28px; height: 28px; display: grid; place-items: center; border: 0; border-radius: 9px; color: var(--muted); background: #fff; }
 .composer { display: flex; align-items: flex-end; gap: 7px; }
 .upload-button { width: 39px; height: 39px; display: grid; place-items: center; flex: 0 0 auto; border: 0; border-radius: 12px; color: #556366; background: var(--surface); }
@@ -209,6 +210,7 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .composer textarea::placeholder { color: #a3adae; }
 .send-button { width: 39px; height: 39px; display: grid; place-items: center; flex: 0 0 auto; border: 0; border-radius: 12px; color: #fff; background: var(--brand); }
 .send-button:disabled { cursor: default; background: #c8d4d2; }
+.send-button.reading svg { animation: spin 1s linear infinite; }
 .stop-button { width: 39px; height: 39px; display: grid; place-items: center; flex: 0 0 auto; border: 0; border-radius: 12px; color: #fff; background: #3d494b; box-shadow: 0 5px 13px rgba(35,48,50,.16); }
 .stop-hint { margin: 6px 2px -1px; text-align: right; color: #899395; font-size: 8px; line-height: 1.4; }
 .composer textarea:disabled, .upload-button:disabled { opacity: .66; cursor: default; }
@@ -220,7 +222,8 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .image-state { position: absolute; right: 7px; bottom: 7px; display: flex; align-items: center; gap: 4px; padding: 4px 7px; border-radius: 999px; color: #fff; background: rgba(20,31,33,.76); backdrop-filter: blur(8px); font-size: 9px; }
 .image-state svg { animation: spin 1s linear infinite; }
 .image-state.failed { background: rgba(180,35,24,.9); }
-.image-state.failed svg { animation: none; }
+.image-state.ready { background: rgba(17,111,99,.9); }
+.image-state.failed svg, .image-state.ready svg { animation: none; }
 .error-bubble { color: #5d3531; border-color: #f0c7c2; background: #fff8f7; }
 .error-bubble strong { display: block; margin-bottom: 4px; color: var(--danger); font-size: 12px; }
 .error-bubble button { display: flex; align-items: center; gap: 5px; margin-top: 9px; padding: 7px 9px; border: 0; border-radius: 9px; color: var(--danger); background: #fee9e6; font-size: 10px; font-weight: 700; }
