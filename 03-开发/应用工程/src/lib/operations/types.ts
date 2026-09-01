@@ -1,5 +1,7 @@
 export type OpsRecordType =
   | "abnormal_order"
+  | "order_change"
+  | "order_cancel"
   | "logistics_urge"
   | "return_exchange"
   | "service_ticket"
@@ -59,6 +61,7 @@ export interface OpsSourceState {
 export interface OpsSummary {
   total: number;
   abnormalOrders: number;
+  orderOperations: number;
   pendingCases: number;
   highRisk: number;
   humanHandoffs: number;
