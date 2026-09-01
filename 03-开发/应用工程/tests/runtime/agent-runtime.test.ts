@@ -387,6 +387,29 @@ describe("AgentRuntime safety and failures", () => {
     expect(modelEvents.at(-1)?.type === "model" && modelEvents.at(-1)?.payload.outputSummary).toContain("abort");
   });
 
+  it("times out a hanging live-compatible call with a retryable model error", async () => {
+    const traces = new InMemoryRuntimeTraceStore();
+    const execute = vi.fn(async () => response());
+    const hangingText: TextModelAdapter = {
+      ...liveTextModel(),
+      route: vi.fn(() => new Promise<never>(() => undefined)),
+    };
+    const runtime = new AgentRuntime({
+      textModel: hangingText,
+      multimodalModel: new MockMultimodalModelAdapter(),
+      workflow: workflow(execute),
+      traceSink: traces,
+      modelTimeoutMs: 5,
+    });
+
+    const events = await collect(runtime, { sessionId: "S-live-timeout", message: "订单到哪了" });
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(events.at(-1)).toMatchObject({ type: "error", error: { code: "MODEL_TIMEOUT", retryable: true } });
+    const failureTrace = traces.list().find((event) => event.type === "model" && event.status === "failed");
+    expect(failureTrace?.type === "model" && failureTrace.payload.outputSummary).toContain("timeout");
+  });
+
   it.each([
     ["timeout", "MODEL_TIMEOUT", true],
     ["refusal", "MODEL_REFUSED", false],
