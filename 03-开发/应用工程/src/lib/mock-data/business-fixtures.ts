@@ -77,6 +77,19 @@ export const initialOrders: OrderRecord[] = [
     deliveryAddress: "上海市浦东新区演示路 18 号",
     contactPhone: "138****8001",
   },
+  {
+    recordId: "OD202607280017",
+    sourceSystem: "OMS",
+    createdAt: "2026-07-28T11:30:00+08:00",
+    updatedAt: "2026-07-28T12:10:00+08:00",
+    orderId: "OD202607280017",
+    customerId: DEMO_CUSTOMER_ID,
+    sku: "SKU-ZC80-WIFI",
+    productName: "智控系列吸顶灯 ZC80",
+    status: "cancelled",
+    deliveryAddress: "上海市浦东新区演示路 18 号",
+    contactPhone: "138****8001",
+  },
 ];
 
 export const initialFulfillments: FulfillmentRecord[] = [

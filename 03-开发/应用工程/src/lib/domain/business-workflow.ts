@@ -28,9 +28,11 @@ import type {
   OrderChangeRecord,
   OrderLogisticsView,
   OrderManagementAdapter,
+  OrderRecord,
   ResolveConfirmationOptions,
   ReturnExchangeDraft,
   ReturnExchangeRecord,
+  ReturnExchangeStatusView,
   ServiceTicketDraft,
   ServiceTicketRecord,
   StoredConfirmation,
@@ -38,7 +40,7 @@ import type {
   WarehouseManagementAdapter,
   WorkflowContext,
 } from "@/lib/domain/business";
-import { sourceMetadata } from "@/lib/domain/business";
+import { isOrderOperationAllowed, sourceMetadata } from "@/lib/domain/business";
 import { ConfirmationStore, confirmationStore } from "@/lib/stores/business/confirmation-store";
 
 export interface LogisticsQueryOptions {
@@ -204,6 +206,15 @@ export class BusinessWorkflowService {
     };
   }
 
+  async queryOrderOperationCandidate(
+    context: WorkflowContext,
+    options?: AdapterCallOptions,
+  ): Promise<ToolResult<OrderRecord>> {
+    const unauthorized = requireIdentity<OrderRecord>(context, "OMS");
+    if (unauthorized) return unauthorized;
+    return this.oms.getLatestMutableOrder(context.identity.customerId, options);
+  }
+
   async prepareOrderChange(context: WorkflowContext, draft: OrderChangeDraft) {
     const checked = await this.validateOrderWrite(context, draft.orderId, "change");
     if (checked) return checked as ToolResult<ConfirmationRequest<OrderChangeDraft>>;
@@ -339,6 +350,19 @@ export class BusinessWorkflowService {
     return this.crm.listServiceTickets(context.identity.customerId, options);
   }
 
+  async queryReturnExchangeStatus(
+    context: WorkflowContext,
+    requestNo?: string,
+    options?: AdapterCallOptions,
+  ): Promise<ToolResult<ReturnExchangeStatusView>> {
+    const unauthorized = requireIdentity<ReturnExchangeStatusView>(context);
+    if (unauthorized) return unauthorized;
+    if (requestNo !== undefined && !requestNo.trim()) {
+      return businessError("CRM", "INVALID_INPUT", "退换申请编号不能为空");
+    }
+    return this.crm.getReturnExchangeStatus(context.identity.customerId, requestNo, options);
+  }
+
   async escalateToHuman(
     context: WorkflowContext,
     draft: Pick<HumanHandoffDraft, "reason" | "riskLevel" | "summary" | "completedActions" | "pendingQuestions" | "relatedRecordIds">,
@@ -395,7 +419,7 @@ export class BusinessWorkflowService {
     const order = await this.oms.getOrder(orderId);
     if (order.status !== "success") return order;
     if (order.data.customerId !== context.identity.customerId) return confirmationError("OMS", "UNAUTHORIZED", `当前演示身份无权${action === "change" ? "变更" : "取消"}该订单`);
-    if (!["paid", "allocated"].includes(order.data.status)) return confirmationError("OMS", "BUSINESS_REJECTED", `订单当前状态不可${action === "change" ? "变更" : "取消"}`, { orderStatus: order.data.status });
+    if (!isOrderOperationAllowed(order.data.status)) return confirmationError("OMS", "BUSINESS_REJECTED", `订单当前状态不可${action === "change" ? "变更" : "取消"}`, { orderStatus: order.data.status });
     return null;
   }
 
@@ -413,7 +437,7 @@ export class BusinessWorkflowService {
     const order = await this.oms.getOrder(orderId);
     if (order.status !== "success") return order;
     if (order.data.customerId !== context.identity.customerId) return confirmationError(system, "UNAUTHORIZED", "当前演示身份无权执行该操作");
-    if ((operation === "order_change" || operation === "order_cancel") && !["paid", "allocated"].includes(order.data.status)) {
+    if ((operation === "order_change" || operation === "order_cancel") && !isOrderOperationAllowed(order.data.status)) {
       return confirmationError(system, "BUSINESS_REJECTED", "订单状态已变化，请重新准备确认", { orderStatus: order.data.status });
     }
     if (operation === "logistics_urge") {

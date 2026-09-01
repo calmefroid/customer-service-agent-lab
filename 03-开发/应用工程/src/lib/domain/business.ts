@@ -41,6 +41,12 @@ export interface ProductRecord extends BusinessRecord {
 
 export type OrderStatus = "paid" | "allocated" | "shipped" | "delivered" | "cancelled";
 
+export const ORDER_OPERATION_ALLOWED_STATUSES: readonly OrderStatus[] = ["paid", "allocated"];
+
+export function isOrderOperationAllowed(status: OrderStatus): boolean {
+  return ORDER_OPERATION_ALLOWED_STATUSES.includes(status);
+}
+
 export interface OrderRecord extends BusinessRecord {
   sourceSystem: "OMS";
   orderId: string;
@@ -137,12 +143,41 @@ export interface ReturnExchangeDraft extends Record<string, unknown> {
   pickupAddress: string;
 }
 
+export type ReturnExchangeStatus =
+  | "submitted"
+  | "reviewing"
+  | "approved"
+  | "pickup_scheduled"
+  | "completed"
+  | "rejected"
+  | "cancelled";
+
+export interface ReturnExchangeEvent {
+  occurredAt: string;
+  status: ReturnExchangeStatus;
+  description: string;
+}
+
 export interface ReturnExchangeRecord extends BusinessRecord, ReturnExchangeDraft {
   sourceSystem: "CRM";
   requestNo: string;
+  customerId: string;
   sessionId: string;
   idempotencyKey: string;
-  status: "submitted";
+  status: ReturnExchangeStatus;
+  events: ReturnExchangeEvent[];
+}
+
+export interface ReturnExchangeStatusView {
+  recordId: string;
+  requestNo: string;
+  orderId: string;
+  serviceType: ReturnExchangeDraft["serviceType"];
+  product: string;
+  status: ReturnExchangeStatus;
+  updatedAt: string;
+  events: ReturnExchangeEvent[];
+  source: DataSourceMetadata;
 }
 
 export interface ServiceTicketDraft extends Record<string, unknown> {
@@ -268,6 +303,7 @@ export interface ProductMasterAdapter {
 export interface OrderManagementAdapter {
   getOrder(orderId: string, options?: AdapterCallOptions): Promise<ToolResult<OrderRecord>>;
   getLatestOrder(customerId: string, options?: AdapterCallOptions): Promise<ToolResult<OrderRecord>>;
+  getLatestMutableOrder(customerId: string, options?: AdapterCallOptions): Promise<ToolResult<OrderRecord>>;
   createOrderChange(
     draft: OrderChangeDraft,
     sessionId: string,
@@ -303,6 +339,11 @@ export interface CustomerRelationshipAdapter {
     idempotencyKey: string,
     options?: AdapterCallOptions,
   ): Promise<ToolResult<ReturnExchangeRecord>>;
+  getReturnExchangeStatus(
+    customerId: string,
+    requestNo?: string,
+    options?: AdapterCallOptions,
+  ): Promise<ToolResult<ReturnExchangeStatusView>>;
   createServiceTicket(
     customerId: string,
     draft: ServiceTicketDraft,

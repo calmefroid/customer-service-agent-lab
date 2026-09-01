@@ -1,4 +1,5 @@
 import type { OrderCancelRecord, OrderChangeRecord, OrderManagementAdapter } from "@/lib/domain/business";
+import { isOrderOperationAllowed } from "@/lib/domain/business";
 import { businessError, executeMock } from "@/lib/adapters/mock-adapter-utils";
 import { businessStore } from "@/lib/stores/business/business-store";
 
@@ -19,6 +20,16 @@ export class OmsMockAdapter implements OrderManagementAdapter {
     });
   }
 
+  getLatestMutableOrder(customerId: string, options?: Parameters<OrderManagementAdapter["getLatestMutableOrder"]>[1]) {
+    return executeMock("OMS", options, () => {
+      const order = businessStore
+        .listOrders(customerId)
+        .filter((item) => isOrderOperationAllowed(item.status))
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+      return order ? { data: order, records: [order] } : null;
+    });
+  }
+
   createOrderChange(
     draft: Parameters<OrderManagementAdapter["createOrderChange"]>[0],
     sessionId: string,
@@ -30,7 +41,7 @@ export class OmsMockAdapter implements OrderManagementAdapter {
     if (!draft.deliveryAddress && !draft.contactPhone) {
       return Promise.resolve(businessError<OrderChangeRecord>("OMS", "INVALID_INPUT", "至少需要修改地址或联系电话"));
     }
-    if (!["paid", "allocated"].includes(order.status)) {
+    if (!isOrderOperationAllowed(order.status)) {
       return Promise.resolve(
         businessError<OrderChangeRecord>("OMS", "BUSINESS_REJECTED", "订单已进入履约或结束状态，不可变更", {
           orderStatus: order.status,
@@ -68,7 +79,7 @@ export class OmsMockAdapter implements OrderManagementAdapter {
     if (!draft.reason.trim()) {
       return Promise.resolve(businessError<OrderCancelRecord>("OMS", "INVALID_INPUT", "取消原因不能为空"));
     }
-    if (!["paid", "allocated"].includes(order.status)) {
+    if (!isOrderOperationAllowed(order.status)) {
       return Promise.resolve(
         businessError<OrderCancelRecord>("OMS", "BUSINESS_REJECTED", "订单已进入履约或结束状态，不可取消", {
           orderStatus: order.status,

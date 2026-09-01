@@ -129,8 +129,12 @@ export class BusinessStore {
     return this.addIdempotent(this.returnExchanges, record);
   }
 
-  listReturnExchanges(): ReturnExchangeRecord[] {
-    return clone(this.returnExchanges);
+  getReturnExchange(requestNo: string): ReturnExchangeRecord | undefined {
+    return clone(this.returnExchanges.find((item) => item.requestNo === requestNo));
+  }
+
+  listReturnExchanges(customerId?: string): ReturnExchangeRecord[] {
+    return clone(customerId ? this.returnExchanges.filter((item) => item.customerId === customerId) : this.returnExchanges);
   }
 
   addServiceTicket(record: ServiceTicketRecord): ServiceTicketRecord {
