@@ -104,6 +104,49 @@ describe("OpenAICompatibleMultimodalModelAdapter", () => {
     expect(output.responseText).not.toMatch(/可以退换|符合退换资格|确认是假货/);
   });
 
+  it.each([429, 500])("maps multimodal HTTP %s to an explicit retryable error", async (status) => {
+    const fetcher = vi.fn(async () => jsonResponse({ message: "temporary gateway failure" }, status));
+    const adapter = adapterWith(fetcher as unknown as typeof fetch);
+
+    await expect(adapter.observe({
+      message: "看图",
+      attachment: { name: "product.png", type: "image/png", size: 1, dataUrl: "data:image/png;base64,AA==" },
+      history: [],
+    })).rejects.toMatchObject({ code: "unavailable", retryable: true });
+  });
+
+  it("drops typed multimodal reasoning parts before parsing observation JSON", async () => {
+    const fetcher = vi.fn(async () => jsonResponse({
+      choices: [{ message: { content: [
+        { type: "analysis", text: "private visual reasoning" },
+        { type: "text", text: '{"summary":"普通灯具照片","uncertainties":[],"responseText":"只能描述可见信息。","requiresBusinessRouting":false}' },
+      ] } }],
+    }));
+    const adapter = adapterWith(fetcher as unknown as typeof fetch);
+
+    const output = await adapter.observe({
+      message: "看图",
+      attachment: { name: "product.png", type: "image/png", size: 1, dataUrl: "data:image/png;base64,AA==" },
+      history: [],
+    });
+
+    expect(output.summary).toBe("普通灯具照片");
+    expect(JSON.stringify(output)).not.toContain("private visual reasoning");
+  });
+
+  it("rejects an unclosed multimodal think block", async () => {
+    const fetcher = vi.fn(async () => jsonResponse({
+      choices: [{ message: { content: "<think>private unfinished visual reasoning" } }],
+    }));
+    const adapter = adapterWith(fetcher as unknown as typeof fetch);
+
+    await expect(adapter.observe({
+      message: "看图",
+      attachment: { name: "product.png", type: "image/png", size: 1, dataUrl: "data:image/png;base64,AA==" },
+      history: [],
+    })).rejects.toMatchObject({ code: "unavailable", retryable: true });
+  });
+
   it("creates independent live text and multimodal adapters", () => {
     const adapters = createDefaultModelAdapters({
       textMode: "mock",

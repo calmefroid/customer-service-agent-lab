@@ -40,8 +40,8 @@ describe("AliTextModelAdapter", () => {
     expect(fetcher).toHaveBeenCalledOnce();
     const [, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
     expect(init.headers).toMatchObject({ Authorization: "Bearer test-key", "Content-Type": "application/json" });
-    const requestBody = JSON.parse(String(init.body)) as { model: string; stream: boolean; max_tokens: number; messages: unknown[] };
-    expect(requestBody).toMatchObject({ model: "Qwen3.6-27B", stream: false, max_tokens: 1000 });
+    const requestBody = JSON.parse(String(init.body)) as { model: string; stream: boolean; max_tokens: number; enable_thinking: boolean; messages: unknown[] };
+    expect(requestBody).toMatchObject({ model: "Qwen3.6-27B", stream: false, max_tokens: 1000, enable_thinking: false });
     expect(requestBody.messages).toHaveLength(2);
   });
 
@@ -93,6 +93,69 @@ describe("AliTextModelAdapter", () => {
       applicationSystemPrompt: "route",
       responseSchema: { type: "object" },
     })).rejects.toMatchObject({ code: "unavailable", retryable: false });
+  });
+
+  it.each([429, 500])("maps HTTP %s to an explicit retryable error", async (status) => {
+    const fetcher = vi.fn(async () => jsonResponse({ message: "temporary gateway failure" }, status));
+    const adapter = adapterWith(fetcher as unknown as typeof fetch);
+
+    await expect(adapter.route({
+      message: "订单到哪了",
+      history: [],
+      observations: [],
+      remainingIntents: [],
+      applicationSystemPrompt: "route",
+      responseSchema: { type: "object" },
+    })).rejects.toMatchObject({ code: "unavailable", retryable: true });
+  });
+
+  it("drops typed reasoning content and keeps only the final text part", async () => {
+    const fetcher = vi.fn(async () => jsonResponse({
+      choices: [{ message: { content: [
+        { type: "reasoning", text: "private chain of thought" },
+        { type: "text", text: "{\"module\":\"conversation\"}" },
+      ] } }],
+    }));
+    const adapter = adapterWith(fetcher as unknown as typeof fetch);
+
+    const output = await adapter.route({
+      message: "你好",
+      history: [],
+      observations: [],
+      remainingIntents: [],
+      applicationSystemPrompt: "route",
+      responseSchema: { type: "object" },
+    });
+
+    expect(output.raw).toBe('{"module":"conversation"}');
+    expect(output.raw).not.toContain("private chain of thought");
+  });
+
+  it("rejects an unclosed think block instead of exposing it", async () => {
+    const fetcher = vi.fn(async () => jsonResponse({
+      choices: [{ message: { content: "<think>private unfinished reasoning" } }],
+    }));
+    const adapter = adapterWith(fetcher as unknown as typeof fetch);
+
+    await expect(adapter.answer({
+      message: "你好",
+      route: {
+        module: "conversation",
+        intent: "smalltalk",
+        topic: "conversation.greeting",
+        action: "respond",
+        confidence: 0.9,
+        needsClarification: false,
+        requiresConfirmation: false,
+        requiresHuman: false,
+        remainingIntents: [],
+        entities: {},
+        observations: [],
+      },
+      history: [],
+      observations: [],
+      workflowResult: { message: "你好", intent: "smalltalk", riskLevel: "low" },
+    })).rejects.toMatchObject({ code: "unavailable", retryable: true });
   });
 
   it("supports live text with mock multimodal as independent modes", () => {

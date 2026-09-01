@@ -1,4 +1,5 @@
 import { ModelAdapterError, throwIfModelAborted } from "./model-error";
+import { visibleCompletionText, type CompletionContent } from "./completion-content";
 import type {
   ModelCallOptions,
   MultimodalInput,
@@ -8,8 +9,6 @@ import type {
 
 type Fetcher = typeof fetch;
 type ImageDetail = "low" | "high" | "auto";
-type CompletionContent = string | Array<{ type?: string; text?: string }> | null;
-
 interface ChatCompletionResponse {
   choices?: Array<{
     finish_reason?: string | null;
@@ -58,18 +57,6 @@ const OBSERVATION_SYSTEM_PROMPT = `你是灯具品牌售后 Agent 的图片观�
 仅需回答铭牌、型号或图片可见内容，且不需后续业务操作时，可设为 false。
 只输出 JSON 对象：
 {"summary":"客观观察摘要","uncertainties":["不确定项"],"responseText":"给消费者的简洁回复","requiresBusinessRouting":true}`;
-
-function contentText(content: CompletionContent | undefined): string {
-  const value = typeof content === "string"
-    ? content
-    : Array.isArray(content)
-      ? content.map((item) => item.text ?? "").join("")
-      : "";
-  return value
-    .replace(/<think>[\s\S]*?<\/think>/gi, "")
-    .replace(/^[\s\S]*<\/think>/i, "")
-    .trim();
-}
 
 function parseObservation(raw: string): ObservationPayload {
   const fenced = raw.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)?.[1]?.trim() ?? raw.trim();
@@ -190,7 +177,7 @@ export class OpenAICompatibleMultimodalModelAdapter implements MultimodalModelAd
       throw new ModelAdapterError("unavailable", payload.error?.message || payload.message || `多模态模型请求失败 (${response.status})`, retryable);
     }
     const choice = payload.choices?.[0];
-    const content = contentText(choice?.message?.content);
+    const content = visibleCompletionText(choice?.message?.content);
     if (!content) {
       const refused = choice?.finish_reason === "content_filter";
       throw new ModelAdapterError(refused ? "refusal" : "unavailable", refused ? "多模态模型拒绝处理该图片" : "多模态模型未返回内容", !refused);

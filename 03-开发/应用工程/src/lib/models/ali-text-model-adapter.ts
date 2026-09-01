@@ -1,4 +1,5 @@
 import { ModelAdapterError, throwIfModelAborted } from "./model-error";
+import { visibleCompletionText, type CompletionContent } from "./completion-content";
 import type {
   ModelCallOptions,
   TextAnswerInput,
@@ -9,8 +10,6 @@ import type {
 } from "./types";
 
 type Fetcher = typeof fetch;
-type CompletionContent = string | Array<{ type?: string; text?: string }> | null;
-
 interface ChatMessage {
   role: "system" | "user" | "assistant";
   content: string;
@@ -43,20 +42,6 @@ function withoutDuplicatedCurrentMessage(input: { message: string; history: Text
   const history = input.history.slice(-12);
   const last = history.at(-1);
   return last?.role === "user" && last.content === input.message ? history.slice(0, -1) : history;
-}
-
-function contentText(content: CompletionContent | undefined): string {
-  const value = typeof content === "string"
-    ? content
-    : Array.isArray(content)
-      ? content.map((item) => item.text ?? "").join("")
-      : "";
-  // Qwen 系列网关可能把思考片段放在 content 中。消费者与结构化
-  // 路由都只允许使用最终答案，后台 Trace 也不记录模型私有思维链。
-  return value
-    .replace(/<think>[\s\S]*?<\/think>/gi, "")
-    .replace(/^[\s\S]*<\/think>/i, "")
-    .trim();
 }
 
 function stripJsonFence(value: string): string {
@@ -166,7 +151,7 @@ export class AliTextModelAdapter implements TextModelAdapter {
     }
 
     const choice = payload.choices?.[0];
-    const text = contentText(choice?.message?.content);
+    const text = visibleCompletionText(choice?.message?.content);
     if (!text) {
       const refused = choice?.finish_reason === "content_filter";
       throw new ModelAdapterError(refused ? "refusal" : "unavailable", refused ? "模型拒绝处理该请求" : "文字模型未返回内容", !refused);
