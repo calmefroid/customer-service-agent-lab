@@ -3,11 +3,32 @@
 import { Copy, LoaderCircle, RefreshCw, RotateCcw, Sparkles, ThumbsDown, ThumbsUp, TriangleAlert } from "lucide-react";
 
 import { ProgressCard } from "./ProgressCard";
+import type { ConsumerRequestState } from "./consumer-error";
 import type { LocalMessage } from "./types";
 import { UiCard, type UiCardActions } from "./UiCard";
 
 export function BotAvatar() {
   return <span className="bot-avatar"><Sparkles size={15} /></span>;
+}
+
+export function ConsumerRequestStateCard({
+  state,
+  busy,
+  canRetry,
+  onRetry,
+}: {
+  state: ConsumerRequestState;
+  busy: boolean;
+  canRetry: boolean;
+  onRetry: () => void;
+}) {
+  return (
+    <div className={`bubble error-bubble consumer-state ${state.kind}`}>
+      <strong>{state.title}</strong>
+      <p>{state.message}</p>
+      {state.retryable && canRetry && <button disabled={busy} onClick={onRetry}><RefreshCw size={13} />安全重试</button>}
+    </div>
+  );
 }
 
 export function MessageItem({
@@ -54,11 +75,7 @@ export function MessageItem({
   if (message.error) return (
     <div className="message-row">
       <BotAvatar />
-      <div className="bubble error-bubble">
-        <strong>{message.error.stopped ? "已停止生成" : "这次没有处理完"}</strong>
-        <p>{message.error.message}</p>
-        {message.error.retryable && <button disabled={busy} onClick={onRetry}><RefreshCw size={13} />重试上一条消息</button>}
-      </div>
+      <ConsumerRequestStateCard state={message.error} busy={busy} canRetry={message.retryRequest !== undefined} onRetry={onRetry} />
     </div>
   );
 

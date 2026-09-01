@@ -39,8 +39,8 @@ const orderFields: ConfirmationFieldDefinition[] = [
 
 const presentations: Record<ConfirmationOperation, ConfirmationPresentation> = {
   order_change: {
-    title: "确认订单变更",
-    confirmLabel: "确认提交变更",
+    title: "确认修改订单地址申请",
+    confirmLabel: "提交修改地址申请",
     fields: [
       ...orderFields,
       { key: "deliveryAddress", label: "收货地址", input: "textarea", editable: true },
@@ -48,8 +48,8 @@ const presentations: Record<ConfirmationOperation, ConfirmationPresentation> = {
     ],
   },
   order_cancel: {
-    title: "确认取消订单",
-    confirmLabel: "确认提交取消",
+    title: "确认取消订单申请",
+    confirmLabel: "提交取消订单申请",
     fields: [
       ...orderFields,
       { key: "reason", label: "取消原因", input: "textarea", editable: true, required: true },

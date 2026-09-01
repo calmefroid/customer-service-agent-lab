@@ -1,5 +1,7 @@
 import type { ChatRequest, ChatUi } from "@/lib/contracts";
 
+import type { ConsumerRequestState } from "./consumer-error";
+
 export type ProgressStatus = "running" | "completed" | "failed" | "stopped";
 
 export interface LocalProgressStep {
@@ -39,11 +41,7 @@ export interface LocalMessage {
   feedback?: "up" | "down";
   resolved?: boolean;
   progress?: LocalProgress;
-  error?: {
-    message: string;
-    retryable: boolean;
-    stopped?: boolean;
-  };
+  error?: ConsumerRequestState;
   retryRequest?: RequestPayload;
   canRetry?: boolean;
   confirmationClosed?: boolean;
