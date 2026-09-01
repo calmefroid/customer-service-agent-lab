@@ -17,7 +17,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Composer } from "@/components/chat/Composer";
 import { FeedbackSheet } from "@/components/chat/Feedback";
 import { createConfirmationCommand, type ConfirmationSnapshot, type ConfirmationTransportResult } from "@/components/chat/confirmation-flow";
+import { getPublicConsumerError, getStoppedConsumerState } from "@/components/chat/consumer-error";
 import { BotAvatar, MessageItem } from "@/components/chat/MessageItem";
+import { getIdentityConfirmationConfig, type IdentityConfirmationPurpose } from "@/components/chat/OrderAndReturnCards";
 import { ProgressCard } from "@/components/chat/ProgressCard";
 import { createRetryMessage } from "@/components/chat/retry-message";
 import {
@@ -36,9 +38,7 @@ import type {
   ConfirmationDecisionAction,
   ConfirmationRequest,
   OrderView,
-  ReturnFormData,
   ServiceModule,
-  ServiceTicketFormData,
 } from "@/lib/contracts";
 
 const quickActions = [
@@ -71,12 +71,6 @@ function readFileAsDataUrl(file: File): Promise<string> {
     reader.onabort = () => reject(new Error("图片读取已取消"));
     reader.readAsDataURL(file);
   });
-}
-
-function closeLatestConfirmation(messages: LocalMessage[]): LocalMessage[] {
-  const confirmationKinds = new Set<ChatUi["kind"]>(["return_confirm", "logistics_urge_confirm", "service_ticket_form"]);
-  const index = messages.findLastIndex((message) => message.ui && confirmationKinds.has(message.ui.kind));
-  return index < 0 ? messages : messages.map((message, messageIndex) => messageIndex === index ? { ...message, confirmationClosed: true } : message);
 }
 
 export default function Home() {
@@ -141,15 +135,13 @@ export default function Home() {
       });
       if (!response.ok) {
         responseRetryable = response.status >= 500 || response.status === 408 || response.status === 429;
-        let reason = "服务暂时不可用";
         try {
-          const body = await response.json() as { error?: string; code?: string };
-          if (body.error) reason = body.error;
+          const body = await response.json() as { code?: string };
           responseErrorCode = body.code;
         } catch {
-          // Keep the public fallback message.
+          // The consumer never renders an unstructured response body.
         }
-        throw new Error(reason);
+        throw new Error("服务暂时不可用");
       }
       if (payload.attachment) updateImageStatus(options.userMessageId, "recognizing");
 
@@ -179,11 +171,17 @@ export default function Home() {
         progress: stream.progress,
       } : undefined;
       const terminal = stream.terminal;
+      const publicState = terminal?.kind === "stopped"
+        ? getStoppedConsumerState()
+        : terminal?.kind === "error"
+          ? getPublicConsumerError(terminal.code, terminal.retryable, terminal.message)
+          : undefined;
       updateImageStatus(options.userMessageId, terminal?.kind === "completed" ? "ready" : "failed");
 
       setMessages((current) => {
         if (sessionRef.current !== requestSessionId) return current;
-        const retryReady = terminal?.kind === "completed" ? current : current.map((message) => message.id === options.userMessageId ? { ...message, canRetry: true } : message);
+        const canRetry = publicState?.retryable === true && !payload.confirmation;
+        const retryReady = current.map((message) => message.id === options.userMessageId ? { ...message, canRetry } : message);
         const next = progressMessage ? [...retryReady, progressMessage] : [...retryReady];
         if (terminal?.kind === "completed" && stream.message) {
           if (options.replaceUiKind) {
@@ -192,16 +190,11 @@ export default function Home() {
           }
           return [...next, stream.message];
         }
-        const stopped = terminal?.kind === "stopped";
         return [...next, {
-          id: createId(stopped ? "stopped" : "error"),
+          id: createId(publicState?.kind === "stopped" ? "stopped" : "error"),
           role: "assistant",
-          text: stopped ? "已停止生成" : terminal?.kind === "error" ? terminal.message : "这次没有处理完",
-          error: {
-            message: stopped ? "未完成的回复和尚未执行的提交已终止。" : terminal?.kind === "error" ? terminal.message : "请稍后重试",
-            retryable: stopped || terminal?.kind === "error" && terminal.retryable,
-            stopped,
-          },
+          text: publicState?.title ?? "这次没有处理完",
+          error: publicState ?? getPublicConsumerError(undefined, true),
           retryRequest: payload.confirmation ? undefined : payload,
         }];
       });
@@ -213,12 +206,15 @@ export default function Home() {
     const terminal = stream.terminal;
     if (terminal?.kind === "completed") return { status: "completed" };
     if (terminal?.kind === "stopped") return { status: "stopped" };
-    if (terminal?.kind === "error") return {
-      status: "error",
-      message: terminal.message,
-      retryable: terminal.retryable,
-      ...(terminal.code ? { code: terminal.code } : {}),
-    };
+    if (terminal?.kind === "error") {
+      const publicError = getPublicConsumerError(terminal.code, terminal.retryable, terminal.message);
+      return {
+        status: "error",
+        message: publicError.message,
+        retryable: publicError.retryable,
+        ...(terminal.code ? { code: terminal.code } : {}),
+      };
+    }
     return { status: "error", message: "连接意外中断", retryable: true };
   }
 
@@ -272,13 +268,9 @@ export default function Home() {
     userText: string,
     message: string,
     action: ChatRequest["action"],
-    payload?: Pick<ChatRequest, "formData" | "serviceFormData">,
     options?: { replaceUiKind?: ChatUi["kind"] },
   ) {
-    if (action === "submit_return" || action === "submit_logistics_urge" || action === "submit_service_ticket") {
-      setMessages(closeLatestConfirmation);
-    }
-    const request: RequestPayload = { message, action, ...(activeModule ? { module: activeModule } : {}), ...payload };
+    const request: RequestPayload = { message, action, ...(activeModule ? { module: activeModule } : {}) };
     await appendAndCall(userText, request, undefined, options);
   }
 
@@ -297,6 +289,11 @@ export default function Home() {
   async function regenerateConfirmation(): Promise<ConfirmationTransportResult> {
     const message = "请根据当前会话重新生成确认草稿";
     return appendAndCall(message, { message, ...(activeModule ? { module: activeModule } : {}) }, undefined, { replaceUiKind: "confirmation" });
+  }
+
+  function confirmIdentity(purpose: IdentityConfirmationPurpose) {
+    const config = getIdentityConfirmationConfig(purpose);
+    void runAction("确认演示身份", config.requestMessage, config.action);
   }
 
   async function startModule(action: (typeof quickActions)[number]) {
@@ -380,26 +377,15 @@ export default function Home() {
     }
   }
 
-  function cancelConfirmation() {
-    setMessages((current) => [...closeLatestConfirmation(current),
-      { id: createId("user"), role: "user", text: "取消本次操作" },
-      { id: createId("cancelled"), role: "assistant", text: "已取消，未提交任何业务操作。你可以继续补充信息或问其他问题。" },
-    ]);
-  }
-
   const uiActions: UiCardActions = {
-    onIdentity: () => void runAction("确认本人", "查询最近订单", "confirm_identity"),
-    onReturn: (formData: ReturnFormData) => void runAction("确认提交退换货申请", "提交退换货申请", "submit_return", { formData }),
-    onRefresh: () => void runAction("刷新物流", "刷新最近订单物流", "confirm_identity", undefined, { replaceUiKind: "order" }),
+    onConfirmIdentity: confirmIdentity,
+    onRefresh: () => void runAction("刷新物流", "刷新最近订单物流", "confirm_identity", { replaceUiKind: "order" }),
     onContact: setLogisticsContact,
+    onPrepareOrderChange: () => void runAction("申请修改订单地址", "准备修改订单地址申请", "prepare_order_change"),
+    onPrepareOrderCancel: () => void runAction("申请取消订单", "准备取消订单申请", "prepare_order_cancel"),
     onPrepareUrge: () => void runAction("物流有点慢，帮我催一下", "准备物流催办", "prepare_logistics_urge"),
-    onSubmitUrge: () => void runAction("确认催物流", "提交物流催办", "submit_logistics_urge"),
-    onServiceIdentity: () => void runAction("确认本人", "查询最近售后工单", "confirm_service_identity"),
     onPrepareServiceTicket: (reportedIssue: string) => void runAction("排查后仍未恢复，申请报修", `准备售后报修：${reportedIssue}`, "prepare_service_ticket"),
-    onSubmitServiceTicket: (serviceFormData: ServiceTicketFormData) => void runAction(`确认提交${serviceFormData.serviceType}`, `提交${serviceFormData.serviceType}`, "submit_service_ticket", { serviceFormData }),
     onTroubleshootingResolved: () => setToast("已记录问题恢复，无需创建报修"),
-    onCancelConfirmation: cancelConfirmation,
-    onEditConfirmation: () => { setInput("我想修改这次操作的信息："); setToast("请在输入框补充要修改的内容"); },
     onConfirmationDecision: decideConfirmation,
     onRegenerateConfirmation: regenerateConfirmation,
   };

@@ -198,7 +198,7 @@ describe("stage 3 consumer unified confirmation", () => {
 
     expect(requests.map((request) => getConfirmationPresentation(request).title)).toEqual([
       "确认物流催办",
-      "确认订单变更",
+      "确认修改订单地址申请",
       "确认退换申请",
       "确认维修工单",
       "确认安装工单",
