@@ -21,7 +21,7 @@ import { getPublicConsumerError, getStoppedConsumerState } from "@/components/ch
 import { BotAvatar, MessageItem } from "@/components/chat/MessageItem";
 import { getIdentityConfirmationConfig, type IdentityConfirmationPurpose } from "@/components/chat/OrderAndReturnCards";
 import { ProgressCard } from "@/components/chat/ProgressCard";
-import { createRetryMessage } from "@/components/chat/retry-message";
+import { createRetryMessage, withRetryImageSnapshot } from "@/components/chat/retry-message";
 import {
   applyAgentEvent,
   consumeAgentEventStream,
@@ -83,12 +83,14 @@ export default function Home() {
   const [feedbackTarget, setFeedbackTarget] = useState<string | null>(null);
   const [logisticsContact, setLogisticsContact] = useState<OrderView | null>(null);
   const [pendingAttachment, setPendingAttachment] = useState<PendingAttachment | null>(null);
+  const [readingAttachment, setReadingAttachment] = useState(false);
   const [toast, setToast] = useState("");
   const [sessionId, setSessionId] = useState(createSessionId);
   const [activeModule, setActiveModule] = useState<ServiceModule | undefined>();
   const chatRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const attachmentReadRef = useRef(false);
   const sessionRef = useRef(sessionId);
 
   const showQuickActions = useMemo(
@@ -190,13 +192,15 @@ export default function Home() {
           }
           return [...next, stream.message];
         }
-        return [...next, {
+        const retrySource = retryReady.find((message) => message.id === options.userMessageId);
+        const failureMessage: LocalMessage = {
           id: createId(publicState?.kind === "stopped" ? "stopped" : "error"),
           role: "assistant",
           text: publicState?.title ?? "这次没有处理完",
           error: publicState ?? getPublicConsumerError(undefined, true),
           retryRequest: payload.confirmation ? undefined : payload,
-        }];
+        };
+        return [...next, withRetryImageSnapshot(failureMessage, retrySource)];
       });
       abortRef.current = null;
       setActiveStream(null);
@@ -237,26 +241,39 @@ export default function Home() {
   }
 
   async function sendMessage(message = input.trim(), module = activeModule) {
-    if (busy || (!message && !pendingAttachment)) return;
+    if (busy || abortRef.current || attachmentReadRef.current || (!message && !pendingAttachment)) return;
     let attachment: AttachmentMeta | undefined;
-    if (pendingAttachment) {
+    const selectedAttachment = pendingAttachment;
+    if (selectedAttachment) {
+      attachmentReadRef.current = true;
+      setReadingAttachment(true);
+      setPendingAttachment((current) => current?.file === selectedAttachment.file
+        ? { ...current, status: "reading", error: undefined }
+        : current);
       try {
+        await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
         attachment = {
-          name: pendingAttachment.file.name,
-          type: pendingAttachment.file.type,
-          size: pendingAttachment.file.size,
-          dataUrl: await readFileAsDataUrl(pendingAttachment.file),
+          name: selectedAttachment.file.name,
+          type: selectedAttachment.file.type,
+          size: selectedAttachment.file.size,
+          dataUrl: await readFileAsDataUrl(selectedAttachment.file),
         };
       } catch {
+        setPendingAttachment((current) => current?.file === selectedAttachment.file
+          ? { ...current, status: "failed", error: "图片读取失败，请重新选择" }
+          : current);
         setToast("图片读取失败，请重新选择");
         return;
+      } finally {
+        attachmentReadRef.current = false;
+        setReadingAttachment(false);
       }
     }
     const text = message || "这是刚收到的灯具照片";
     const payload: RequestPayload = { message: text, ...(attachment ? { attachment } : {}), ...(module ? { module } : {}) };
-    const image = pendingAttachment ? {
-      url: pendingAttachment.url,
-      name: pendingAttachment.file.name,
+    const image = selectedAttachment ? {
+      url: selectedAttachment.url,
+      name: selectedAttachment.file.name,
       status: "uploading" as const,
     } : undefined;
     setInput("");
@@ -327,7 +344,7 @@ export default function Home() {
   }
 
   async function retry(message: LocalMessage) {
-    if (!message.retryRequest || busy) return;
+    if (!message.retryRequest || busy || abortRef.current || attachmentReadRef.current) return;
     const retryMessage = createRetryMessage(message, createId("user"));
     if (!retryMessage) return;
     setMessages((current) => [...current, retryMessage]);
@@ -399,7 +416,7 @@ export default function Home() {
         <button className="icon-button" aria-label="更多" onClick={() => setMenuOpen((open) => !open)}><Ellipsis size={20} /></button>
       </header>
 
-      <section className="chat" ref={chatRef} aria-live="polite" aria-busy={busy}>
+      <section className="chat" ref={chatRef} aria-live="polite" aria-busy={busy || readingAttachment}>
         <div className="date-label">今天</div>
         {messages.map((message) => <MessageItem key={message.id} message={message} busy={busy} actions={uiActions} onRate={(feedback) => rate(message.id, feedback)} onCopy={() => void copyMessage(message.text)} onRetry={() => void retry(message)} />)}
         {showQuickActions && !busy && <div className="quick-grid">{quickActions.map((action) => { const Icon = action.icon; return <button key={action.id} className="quick-card" onClick={() => void startModule(action)}><span className="quick-icon"><Icon size={16} /></span><span className="quick-title">{action.title}</span><span className="quick-subtitle">{action.subtitle}</span></button>; })}</div>}
@@ -408,7 +425,7 @@ export default function Home() {
         {busy && !activeStream?.progress && !activeStream?.draftText && <div className="message-row"><BotAvatar /><div className="bubble typing" aria-label="正在回复"><span /><span /><span /></div></div>}
       </section>
 
-      <Composer input={input} busy={busy} pending={pendingAttachment} fileRef={fileRef} onInput={setInput} onSelectFile={selectFile} onRemoveFile={removePendingFile} onSend={() => void sendMessage()} onStop={() => abortRef.current?.abort()} />
+      <Composer input={input} busy={busy} readingAttachment={readingAttachment} pending={pendingAttachment} fileRef={fileRef} onInput={setInput} onSelectFile={selectFile} onRemoveFile={removePendingFile} onSend={() => void sendMessage()} onStop={() => abortRef.current?.abort()} />
       {menuOpen && <div className="menu-panel"><button onClick={restart}><RotateCcw size={17} />重新开始会话</button><button onClick={() => { setMenuOpen(false); setToast("支持订单物流、退换破损与故障报修"); }}><CircleHelp size={17} />查看服务范围</button></div>}
 
       {humanSheet && <><button className="backdrop" aria-label="关闭弹窗" onClick={() => setHumanSheet(false)} /><section className="sheet" role="dialog" aria-modal="true" aria-labelledby="human-title"><div className="sheet-handle" /><button className="sheet-close" aria-label="关闭" onClick={() => setHumanSheet(false)}><X size={17} /></button><h2 id="human-title">转接人工客服</h2><p>当前问题和已确认信息会一并转交，你不需要重复描述。</p><div className="summary-card"><strong>本次会话摘要</strong><span>当前共有 {messages.filter((message) => message.role === "user").length} 条用户消息，将同步给人工客服。</span></div><div className="sheet-actions"><button onClick={() => setHumanSheet(false)}>继续问机器人</button><button className="primary" onClick={() => { setHumanSheet(false); setMessages((current) => [...current, { id: createId("human"), role: "assistant", text: "已进入人工客服队列，当前会话摘要已同步。你可以继续补充信息。" }]); }}>确认转人工</button></div></section></>}

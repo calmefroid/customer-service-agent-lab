@@ -50,6 +50,6 @@ export interface LocalMessage {
 export interface PendingAttachment {
   file: File;
   url: string;
-  status: "selected" | "failed";
+  status: "selected" | "reading" | "failed";
   error?: string;
 }

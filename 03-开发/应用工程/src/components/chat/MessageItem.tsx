@@ -1,6 +1,6 @@
 "use client";
 
-import { Copy, LoaderCircle, RefreshCw, RotateCcw, Sparkles, ThumbsDown, ThumbsUp, TriangleAlert } from "lucide-react";
+import { CircleCheck, Copy, LoaderCircle, RefreshCw, RotateCcw, Sparkles, ThumbsDown, ThumbsUp, TriangleAlert } from "lucide-react";
 
 import { ProgressCard } from "./ProgressCard";
 import type { ConsumerRequestState } from "./consumer-error";
@@ -56,13 +56,12 @@ export function MessageItem({
             <div className="message-image-wrap">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={message.image.url} alt="用户上传的图片" />
-              {message.image.status !== "ready" && (
-                <span className={`image-state ${message.image.status}`}>
-                  {message.image.status === "uploading" && <><LoaderCircle size={12} />上传中</>}
-                  {message.image.status === "recognizing" && <><LoaderCircle size={12} />识别中</>}
-                  {message.image.status === "failed" && <><TriangleAlert size={12} />识别失败</>}
-                </span>
-              )}
+              <span className={`image-state ${message.image.status}`}>
+                {message.image.status === "uploading" && <><LoaderCircle size={12} />上传中</>}
+                {message.image.status === "recognizing" && <><LoaderCircle size={12} />识别中</>}
+                {message.image.status === "ready" && <><CircleCheck size={12} />识别完成</>}
+                {message.image.status === "failed" && <><TriangleAlert size={12} />识别失败</>}
+              </span>
             </div>
           )}
           <p>{message.text}</p>
