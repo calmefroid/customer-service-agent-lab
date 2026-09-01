@@ -38,6 +38,12 @@ const TRACE_PROMPTS = {
 type ModelOperation = "image_observation" | "text_route" | "low_risk_answer";
 type ModelIdentity = { provider: string; model: string; mode: "mock" | "live" };
 
+function isDeterministicP0Route(route: RouteDecision): boolean {
+  return route.confidence >= 0.9
+    && route.module !== "conversation"
+    && route.intent !== "other";
+}
+
 function redactString(value: string): string {
   return value
     .replace(/<think>[\s\S]*?<\/think>/gi, "[REDACTED_PRIVATE_REASONING]")
@@ -384,71 +390,101 @@ export class AgentRuntime {
         remainingIntents: session.remainingIntents,
       });
       const routeIdentity = this.dependencies.textModel;
-      appendModelTrace({
-        identity: routeIdentity,
-        operation: "text_route",
-        status: "started",
-        inputSummary: routeInputSummary,
-      });
-      let modelOutput;
-      try {
-        modelOutput = await withTimeout(
-          (signal) => this.dependencies.textModel.route(modelInput, { signal }),
-          options.signal,
-          this.modelTimeoutMs,
-        );
-      } catch (error) {
+      const deterministicGuard = fallbackRoute({ ...request, observations });
+      let route: RouteDecision;
+      if (request.action || request.confirmation) {
+        route = deterministicGuard;
+        appendTrace({
+          type: "model",
+          status: "skipped",
+          durationMs: 0,
+          payload: {
+            provider: routeIdentity.provider,
+            model: routeIdentity.model,
+            mode: routeIdentity.mode,
+            inputSummary: routeInputSummary,
+            outputSummary: modelOutputSummary(undefined, request.action ? "explicit_action" : "confirmation_command"),
+          },
+        });
+        appendTrace({
+          type: "rule",
+          status: "completed",
+          payload: {
+            ruleId: "RULE-DETERMINISTIC-GUARD-001",
+            matched: true,
+            evidence: [request.action ?? "confirmation_command"],
+            effect: request.action ? "skip_model_route:explicit_action" : "skip_model_route:confirmation_command",
+          },
+        });
+      } else {
         appendModelTrace({
           identity: routeIdentity,
           operation: "text_route",
-          status: "failed",
+          status: "started",
           inputSummary: routeInputSummary,
-          fallbackReason: modelFailureReason(error, "text_route_failed"),
+        });
+        let modelOutput;
+        try {
+          modelOutput = await withTimeout(
+            (signal) => this.dependencies.textModel.route(modelInput, { signal }),
+            options.signal,
+            this.modelTimeoutMs,
+          );
+        } catch (error) {
+          appendModelTrace({
+            identity: routeIdentity,
+            operation: "text_route",
+            status: "failed",
+            inputSummary: routeInputSummary,
+            fallbackReason: modelFailureReason(error, "text_route_failed"),
+            durationMs: this.now().getTime() - routeStartedAt,
+          });
+          throw error;
+        }
+
+        const parsed = parseStructuredRoute(modelOutput.raw);
+        appendModelTrace({
+          identity: modelOutput,
+          operation: "text_route",
+          status: "completed",
+          inputSummary: routeInputSummary,
+          output: {
+            raw: modelOutput.raw,
+            structuredOutput: parsed.ok ? "accepted" : "rejected",
+          },
+          ...(parsed.ok ? {} : { fallbackReason: parsed.reason }),
           durationMs: this.now().getTime() - routeStartedAt,
         });
-        throw error;
-      }
-
-      const parsed = parseStructuredRoute(modelOutput.raw);
-      appendModelTrace({
-        identity: modelOutput,
-        operation: "text_route",
-        status: "completed",
-        inputSummary: routeInputSummary,
-        output: {
-          raw: modelOutput.raw,
-          structuredOutput: parsed.ok ? "accepted" : "rejected",
-        },
-        ...(parsed.ok ? {} : { fallbackReason: parsed.reason }),
-        durationMs: this.now().getTime() - routeStartedAt,
-      });
-      appendTrace({
-        type: "rule",
-        status: "completed",
-        payload: {
-          ruleId: "RULE-STRUCTURED-OUTPUT-PARSE-001",
-          matched: parsed.ok,
-          evidence: [TRACE_PROMPTS.textRoute.schemaVersion, ...(parsed.ok ? [] : parsed.issues)],
-          effect: parsed.ok ? "accept_structured_route" : `fallback_to_deterministic_route:${parsed.reason}`,
-        },
-      });
-      let route: RouteDecision;
-      if (parsed.ok) route = parsed.value;
-      else {
-        route = fallbackRoute({ ...request, observations });
         appendTrace({
-          type: "error",
+          type: "rule",
           status: "completed",
           payload: {
-            code: "MODEL_OUTPUT_INVALID",
-            message: "模型结构化路由输出无效，已使用确定性规则兜底",
-            retryable: false,
-            internalCode: "MODEL_OUTPUT_INVALID",
+            ruleId: "RULE-STRUCTURED-OUTPUT-PARSE-001",
+            matched: parsed.ok,
+            evidence: [TRACE_PROMPTS.textRoute.schemaVersion, ...(parsed.ok ? [] : parsed.issues)],
+            effect: parsed.ok ? "accept_structured_route" : `fallback_to_deterministic_route:${parsed.reason}`,
           },
         });
+        if (parsed.ok) route = parsed.value;
+        else {
+          route = deterministicGuard;
+          appendTrace({
+            type: "error",
+            status: "completed",
+            payload: {
+              code: "MODEL_OUTPUT_INVALID",
+              message: "模型结构化路由输出无效，已使用确定性规则兜底",
+              retryable: false,
+              internalCode: "MODEL_OUTPUT_INVALID",
+            },
+          });
+        }
       }
-      const deterministicGuard = fallbackRoute({ ...request, observations });
-      if (request.action || deterministicGuard.topic.startsWith("safety.") || deterministicGuard.requiresHuman) {
+      if (!request.action && !request.confirmation && (
+        deterministicGuard.topic.startsWith("safety.")
+        || deterministicGuard.requiresHuman
+        || isDeterministicP0Route(deterministicGuard)
+      )) {
         route = deterministicGuard;
         appendTrace({
           type: "rule",
@@ -456,8 +492,8 @@ export class AgentRuntime {
           payload: {
             ruleId: "RULE-DETERMINISTIC-GUARD-001",
             matched: true,
-            evidence: [request.action ?? deterministicGuard.topic],
-            effect: "override_model_route",
+            evidence: [deterministicGuard.topic],
+            effect: "override_model_route:deterministic_p0",
           },
         });
       }

@@ -262,6 +262,7 @@ describe("stage 4 Mock and Runtime compatibility", () => {
   });
 
   it("overrides a model guess with the deterministic order-cancel action", async () => {
+    const traces = new InMemoryRuntimeTraceStore();
     const wrongModel: TextModelAdapter = {
       provider: "test",
       model: "wrong-route",
@@ -284,6 +285,7 @@ describe("stage 4 Mock and Runtime compatibility", () => {
       textModel: wrongModel,
       multimodalModel: new MockMultimodalModelAdapter(),
       workflow: { execute },
+      traceSink: traces,
     });
 
     for await (const _event of runtime.run({
@@ -301,6 +303,49 @@ describe("stage 4 Mock and Runtime compatibility", () => {
       topic: "order.cancel",
       action: "prepare_order_cancel",
       requiresConfirmation: true,
+    });
+    expect(wrongModel.route).not.toHaveBeenCalled();
+    expect(traces.list().find((event) => event.type === "model")).toMatchObject({
+      type: "model",
+      status: "skipped",
+    });
+  });
+
+  it("keeps a recognized natural-language P0 route stable when the live model guesses another valid route", async () => {
+    const wrongModel: TextModelAdapter = {
+      provider: "test",
+      model: "wrong-live-route",
+      mode: "live",
+      route: vi.fn(async () => ({
+        raw: JSON.stringify(structuredRoute({ intent: "smalltalk", topic: "conversation.greeting", action: "respond" })),
+        provider: "test",
+        model: "wrong-live-route",
+        mode: "live" as const,
+      })),
+      answer: vi.fn(async () => ({ text: "", provider: "test", model: "wrong-live-route", mode: "live" as const })),
+    };
+    const execute = vi.fn(async (_request: ChatRequest, context: RuntimeWorkflowContext): Promise<ChatResponse> => ({
+      message: "请先确认身份。",
+      intent: context.route.intent,
+      riskLevel: "medium",
+      traceId: context.traceId,
+    }));
+    const runtime = new AgentRuntime({
+      textModel: wrongModel,
+      multimodalModel: new MockMultimodalModelAdapter(),
+      workflow: { execute },
+    });
+
+    for await (const _event of runtime.run({ sessionId: "S-stage5-p0-guard", message: "我的换货申请处理到哪了" })) {
+      // Drain the stream so the workflow receives the guarded route.
+    }
+
+    const call = execute.mock.calls[0] as unknown as [ChatRequest, RuntimeWorkflowContext];
+    expect(call[1].route).toMatchObject({
+      module: "return",
+      intent: "return_exchange",
+      topic: "return.status",
+      action: "confirm_identity_then_query_return",
     });
   });
 

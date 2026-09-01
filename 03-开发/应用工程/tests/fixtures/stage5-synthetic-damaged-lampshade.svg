@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600">
+  <rect width="800" height="600" fill="#f2f0ea"/>
+  <ellipse cx="400" cy="290" rx="260" ry="190" fill="#faf7ef" stroke="#4c4c49" stroke-width="12"/>
+  <path d="M430 115 L385 220 L445 270 L365 360 L425 405 L380 480" fill="none" stroke="#b42318" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M390 220 L325 190 M445 270 L510 230 M365 360 L300 400 M425 405 L505 455" fill="none" stroke="#b42318" stroke-width="11" stroke-linecap="round"/>
+  <text x="400" y="545" text-anchor="middle" font-family="sans-serif" font-size="30" fill="#333">Synthetic test image: visible cracked lampshade</text>
+</svg>

@@ -41,8 +41,33 @@ describe("AliTextModelAdapter", () => {
     const [, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
     expect(init.headers).toMatchObject({ Authorization: "Bearer test-key", "Content-Type": "application/json" });
     const requestBody = JSON.parse(String(init.body)) as { model: string; stream: boolean; max_tokens: number; enable_thinking: boolean; messages: unknown[] };
-    expect(requestBody).toMatchObject({ model: "Qwen3.6-27B", stream: false, max_tokens: 1000, enable_thinking: false });
+    expect(requestBody).toMatchObject({ model: "Qwen3.6-27B", stream: false, max_tokens: 3000, enable_thinking: false });
     expect(requestBody.messages).toHaveLength(2);
+  });
+
+  it("keeps enough visible completion budget when a lower value is configured", async () => {
+    const fetcher = vi.fn(async () => jsonResponse({
+      choices: [{ message: { content: "{\"module\":\"conversation\"}" } }],
+    }));
+    const adapter = new AliTextModelAdapter({
+      baseUrl: "https://model.example.test/v1/chat/completions",
+      apiKey: "test-key",
+      model: "Qwen3.6-27B",
+      maxTokens: 1000,
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await adapter.route({
+      message: "你好",
+      history: [],
+      observations: [],
+      remainingIntents: [],
+      applicationSystemPrompt: "route",
+      responseSchema: { type: "object" },
+    });
+
+    const [, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toMatchObject({ max_tokens: 3000 });
   });
 
   it("generates a consumer answer from the executed workflow result", async () => {

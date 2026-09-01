@@ -27,14 +27,20 @@ function imageDetail(value: string | undefined): "low" | "high" | "auto" | undef
 
 export function createConfiguredAgentRuntime(options: ConfiguredAgentRuntimeOptions = {}): AgentRuntime {
   const defaultMode = modelMode(process.env.MODEL_MODE, "mock");
+  const textMode = modelMode(process.env.TEXT_MODEL_MODE, defaultMode);
+  const multimodalMode = modelMode(process.env.MULTIMODAL_MODEL_MODE, defaultMode);
+  const configuredTimeoutMs = positiveInteger(process.env.MODEL_TIMEOUT_MS);
+  const modelTimeoutMs = textMode === "live" || multimodalMode === "live"
+    ? Math.max(configuredTimeoutMs ?? 60_000, 60_000)
+    : configuredTimeoutMs;
   const unifiedModel = process.env.UNIFIED_MODEL_MODE === "true";
   const textBaseUrl = process.env.TEXT_MODEL_BASE_URL;
   const textApiKey = process.env.TEXT_MODEL_API_KEY;
   const textModel = process.env.TEXT_MODEL_NAME;
   const adapters = createDefaultModelAdapters({
     mode: defaultMode,
-    textMode: modelMode(process.env.TEXT_MODEL_MODE, defaultMode),
-    multimodalMode: modelMode(process.env.MULTIMODAL_MODEL_MODE, defaultMode),
+    textMode,
+    multimodalMode,
     textBaseUrl,
     textApiKey,
     textModel,
@@ -54,6 +60,6 @@ export function createConfiguredAgentRuntime(options: ConfiguredAgentRuntimeOpti
     workflow,
     sessions: options.sessions ?? defaultRuntimeSessions,
     traceSink: options.traceSink ?? defaultRuntimeTraceStore,
-    modelTimeoutMs: positiveInteger(process.env.MODEL_TIMEOUT_MS),
+    modelTimeoutMs,
   });
 }

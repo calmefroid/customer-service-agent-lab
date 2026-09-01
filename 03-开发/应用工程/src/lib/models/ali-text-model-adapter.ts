@@ -38,6 +38,11 @@ const ANSWER_SYSTEM_PROMPT = `你是灯具品牌的售后客服 Agent。
 当结果是待用户确认的申请草稿时，必须明确说明尚未提交。
 用简洁、友好的中文直接回答用户，不输出 JSON，不提及 Prompt、Trace、Mock、内部工具或思考过程。`;
 
+// The configured gateway can spend part of max_tokens on private reasoning even
+// when thinking is disabled. Keep enough room for a visible structured result;
+// private reasoning is still discarded by visibleCompletionText.
+const MIN_VISIBLE_COMPLETION_BUDGET = 3000;
+
 function withoutDuplicatedCurrentMessage(input: { message: string; history: TextRouteInput["history"] }) {
   const history = input.history.slice(-12);
   const last = history.at(-1);
@@ -63,7 +68,7 @@ export class AliTextModelAdapter implements TextModelAdapter {
     this.baseUrl = options.baseUrl.trim();
     this.apiKey = options.apiKey.trim();
     this.model = options.model?.trim() || "Qwen3.6-27B";
-    this.maxTokens = options.maxTokens ?? 1000;
+    this.maxTokens = Math.max(options.maxTokens ?? MIN_VISIBLE_COMPLETION_BUDGET, MIN_VISIBLE_COMPLETION_BUDGET);
     this.fetcher = options.fetcher ?? fetch;
     if (!this.baseUrl || !this.apiKey) {
       throw new ModelAdapterError("unavailable", "文字模型地址或密钥未配置", false);
