@@ -14,11 +14,15 @@ export interface BusinessStoreQuery {
   listOrders(customerId?: string): readonly unknown[];
   listFulfillments(): readonly unknown[];
   listShipments(): readonly unknown[];
+  listOrderChanges(): readonly unknown[];
+  listOrderCancellations(): readonly unknown[];
   listLogisticsUrges(): readonly unknown[];
   listReturnExchanges(): readonly unknown[];
   listServiceTickets(customerId?: string): readonly unknown[];
   listHumanHandoffs(): readonly unknown[];
 }
+
+export type OpsTraceResolver = (sessionId: string) => string | null | undefined;
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -45,7 +49,7 @@ function channel(record: UnknownRecord): OpsChannel {
 
 function redact(value: string): string {
   const maskedPhone = value.replace(/(?<!\d)1\d{10}(?!\d)/g, (phone) => `${phone.slice(0, 3)}****${phone.slice(-4)}`);
-  if (/(省|市|区|县|镇|街|路|号|室)/.test(maskedPhone) && !maskedPhone.includes("****")) {
+  if (/(?:省|市|区|县).*(?:街|路|号|室)|(?:街|路).*(?:号|室)/.test(maskedPhone)) {
     return "已隐藏（运营台不展示完整地址）";
   }
   return maskedPhone;
@@ -71,7 +75,11 @@ function timeline(record: UnknownRecord): OpsTimelineEvent[] {
   });
 }
 
-function traceLink(sessionId: string): string {
+function traceLink(traceId: string): string {
+  return `/trace?traceId=${encodeURIComponent(traceId)}`;
+}
+
+function sessionTraceLink(sessionId: string): string {
   return `/trace?sessionId=${encodeURIComponent(sessionId)}`;
 }
 
@@ -80,15 +88,26 @@ function baseRecord(record: UnknownRecord) {
   const createdAt = text(record, "createdAt", new Date(0).toISOString());
   const updatedAt = text(record, "updatedAt", createdAt);
   const sessionId = text(record, "sessionId") || null;
+  const traceId = text(record, "traceId") || null;
   return {
     sourceRecordId,
     sourceSystem: text(record, "sourceSystem", "Sandbox"),
     createdAt,
     updatedAt,
     sessionId,
-    traceId: null,
-    traceHref: sessionId ? traceLink(sessionId) : null,
+    traceId,
+    traceHref: traceId ? traceLink(traceId) : sessionId ? sessionTraceLink(sessionId) : null,
   };
+}
+
+function attachTraceIds(records: UnknownRecord[], resolveTraceId?: OpsTraceResolver): UnknownRecord[] {
+  if (!resolveTraceId) return records;
+  return records.map((record) => {
+    if (text(record, "traceId")) return record;
+    const sessionId = text(record, "sessionId");
+    const traceId = sessionId ? resolveTraceId(sessionId) : null;
+    return traceId ? { ...record, traceId } : record;
+  });
 }
 
 function safeRead(
@@ -161,7 +180,7 @@ function logisticsUrges(records: UnknownRecord[]): OpsRecord[] {
       id: `logistics-urge:${base.sourceRecordId}`,
       type: "logistics_urge",
       title: `物流催办 · ${text(record, "urgeRequestNo", base.sourceRecordId)}`,
-      summary: text(record, "reason", "用户已提交物流催办"),
+      summary: redact(text(record, "reason", "用户已提交物流催办")),
       status: text(record, "status", "submitted"),
       riskLevel: "low",
       channel: "online",
@@ -171,6 +190,49 @@ function logisticsUrges(records: UnknownRecord[]): OpsRecord[] {
         field("CRM 留痕", record.crmRecordId),
       ),
       timeline: [],
+    };
+  });
+}
+
+function orderChanges(records: UnknownRecord[]): OpsRecord[] {
+  return records.map((record) => {
+    const base = baseRecord(record);
+    return {
+      ...base,
+      id: `order-change:${base.sourceRecordId}`,
+      type: "order_change",
+      title: `订单变更申请 · ${text(record, "changeRequestNo", base.sourceRecordId)}`,
+      summary: "用户已确认并提交订单收货信息变更",
+      status: text(record, "status", "submitted"),
+      riskLevel: "medium",
+      channel: "online",
+      fields: fields(
+        field("订单编号", record.orderId),
+        field("变更后联系方式", record.contactPhone),
+        field("变更后收货地址", record.deliveryAddress),
+      ),
+      timeline: [{ occurredAt: base.createdAt, description: "订单变更申请已提交至 OMS Sandbox" }],
+    };
+  });
+}
+
+function orderCancellations(records: UnknownRecord[]): OpsRecord[] {
+  return records.map((record) => {
+    const base = baseRecord(record);
+    return {
+      ...base,
+      id: `order-cancel:${base.sourceRecordId}`,
+      type: "order_cancel",
+      title: `订单取消申请 · ${text(record, "cancelRequestNo", base.sourceRecordId)}`,
+      summary: redact(text(record, "reason", "用户已确认并提交订单取消申请")),
+      status: text(record, "status", "submitted"),
+      riskLevel: "medium",
+      channel: "online",
+      fields: fields(
+        field("订单编号", record.orderId),
+        field("取消原因", record.reason),
+      ),
+      timeline: [{ occurredAt: base.createdAt, description: "订单取消申请已提交至 OMS Sandbox" }],
     };
   });
 }
@@ -185,7 +247,7 @@ function returnExchanges(records: UnknownRecord[]): OpsRecord[] {
       type: "return_exchange",
       subtype: serviceType,
       title: `${serviceType === "exchange" ? "换货" : "退货"}申请 · ${text(record, "requestNo", base.sourceRecordId)}`,
-      summary: text(record, "reason", "用户已提交退换申请"),
+      summary: redact(text(record, "reason", "用户已提交退换申请")),
       status: text(record, "status", "submitted"),
       riskLevel: "medium",
       channel: "online",
@@ -196,7 +258,7 @@ function returnExchanges(records: UnknownRecord[]): OpsRecord[] {
         field("联系方式", record.contactPhone),
         field("上门地址", record.pickupAddress),
       ),
-      timeline: [],
+      timeline: timeline(record),
     };
   });
 }
@@ -211,7 +273,7 @@ function serviceTickets(records: UnknownRecord[]): OpsRecord[] {
       type: "service_ticket",
       subtype: serviceType,
       title: `${serviceType === "installation" ? "安装" : "维修"}工单 · ${text(record, "ticketNo", base.sourceRecordId)}`,
-      summary: text(record, "issueDescription", "售后工单待处理"),
+      summary: redact(text(record, "issueDescription", "售后工单待处理")),
       status: text(record, "status", "submitted"),
       riskLevel: risk(record),
       channel: channel(record),
@@ -236,7 +298,7 @@ function humanHandoffs(records: UnknownRecord[]): OpsRecord[] {
       type: "human_handoff",
       subtype: text(record, "reason"),
       title: `人工接管 · ${text(record, "handoffNo", base.sourceRecordId)}`,
-      summary: text(record, "summary", "会话已转交人工客服"),
+      summary: redact(text(record, "summary", "会话已转交人工客服")),
       status: text(record, "status", "queued"),
       riskLevel: risk(record),
       channel: "unknown",
@@ -284,20 +346,28 @@ function matches(record: OpsRecord, filters: OpsFilters): boolean {
   return haystack.includes(query);
 }
 
-export function queryOperations(store: BusinessStoreQuery, filters: OpsFilters = {}): OpsQueryResult {
+export function queryOperations(
+  store: BusinessStoreQuery,
+  filters: OpsFilters = {},
+  resolveTraceId?: OpsTraceResolver,
+): OpsQueryResult {
   const sources: OpsSourceState[] = [];
   const orders = safeRead("OMS 订单", () => store.listOrders(), sources);
   const fulfillments = safeRead("WMS 履约", () => store.listFulfillments(), sources);
   const shipments = safeRead("TMS 物流", () => store.listShipments(), sources);
-  const urgeRecords = safeRead("TMS 催办", () => store.listLogisticsUrges(), sources);
-  const returnRecords = safeRead("CRM 退换", () => store.listReturnExchanges(), sources);
-  const ticketRecords = safeRead("CRM 工单", () => store.listServiceTickets(), sources);
-  const handoffRecords = safeRead("CRM 人工接管", () => store.listHumanHandoffs(), sources);
+  const changeRecords = attachTraceIds(safeRead("OMS 订单变更", () => store.listOrderChanges(), sources), resolveTraceId);
+  const cancelRecords = attachTraceIds(safeRead("OMS 订单取消", () => store.listOrderCancellations(), sources), resolveTraceId);
+  const urgeRecords = attachTraceIds(safeRead("TMS 催办", () => store.listLogisticsUrges(), sources), resolveTraceId);
+  const returnRecords = attachTraceIds(safeRead("CRM 退换", () => store.listReturnExchanges(), sources), resolveTraceId);
+  const ticketRecords = attachTraceIds(safeRead("CRM 工单", () => store.listServiceTickets(), sources), resolveTraceId);
+  const handoffRecords = attachTraceIds(safeRead("CRM 人工接管", () => store.listHumanHandoffs(), sources), resolveTraceId);
 
   const tickets = serviceTickets(ticketRecords);
   const handoffs = humanHandoffs(handoffRecords);
   const allItems = [
     ...abnormalOrders(orders, fulfillments, shipments),
+    ...orderChanges(changeRecords),
+    ...orderCancellations(cancelRecords),
     ...logisticsUrges(urgeRecords),
     ...returnExchanges(returnRecords),
     ...tickets,
@@ -311,6 +381,7 @@ export function queryOperations(store: BusinessStoreQuery, filters: OpsFilters =
     summary: {
       total: allItems.length,
       abnormalOrders: allItems.filter((item) => item.type === "abnormal_order").length,
+      orderOperations: allItems.filter((item) => item.type === "order_change" || item.type === "order_cancel").length,
       pendingCases: allItems.filter((item) => !terminalStatuses.has(item.status)).length,
       highRisk: allItems.filter((item) => item.riskLevel === "high" && item.type !== "risk_session").length,
       humanHandoffs: allItems.filter((item) => item.type === "human_handoff").length,
@@ -321,8 +392,8 @@ export function queryOperations(store: BusinessStoreQuery, filters: OpsFilters =
   };
 }
 
-export function getOperationDetail(store: BusinessStoreQuery, id: string): OpsDetailResult {
-  const result = queryOperations(store);
+export function getOperationDetail(store: BusinessStoreQuery, id: string, resolveTraceId?: OpsTraceResolver): OpsDetailResult {
+  const result = queryOperations(store, {}, resolveTraceId);
   return {
     item: result.items.find((item) => item.id === id) ?? null,
     sourceHealth: result.sourceHealth,

@@ -4,6 +4,7 @@ import {
   AlertCircle,
   AlertTriangle,
   ArrowUpRight,
+  Ban,
   Bot,
   Box,
   ChevronRight,
@@ -11,7 +12,9 @@ import {
   Clock3,
   Headphones,
   PackageSearch,
+  PencilLine,
   RefreshCw,
+  RotateCcw,
   Search,
   ShieldAlert,
   TicketCheck,
@@ -21,6 +24,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { requestSandboxReset } from "@/lib/operations";
 import type {
   OpsChannel,
   OpsQueryResult,
@@ -33,6 +37,8 @@ import styles from "./ops.module.css";
 
 const typeLabels: Record<OpsRecordType, string> = {
   abnormal_order: "异常订单",
+  order_change: "订单变更申请",
+  order_cancel: "订单取消申请",
   logistics_urge: "物流催办",
   return_exchange: "退换申请",
   service_ticket: "维修 / 安装",
@@ -48,6 +54,11 @@ const statusLabels: Record<string, string> = {
   queued: "排队中",
   reviewing: "审核中",
   awaiting_appointment: "待预约",
+  approved: "已通过",
+  pickup_scheduled: "已预约取件",
+  completed: "已完成",
+  rejected: "已驳回",
+  cancelled: "已取消",
   closed: "已完成",
 };
 
@@ -83,6 +94,8 @@ function formatTime(value: string) {
 
 function iconFor(type: OpsRecordType) {
   if (type === "abnormal_order") return <PackageSearch size={16} />;
+  if (type === "order_change") return <PencilLine size={16} />;
+  if (type === "order_cancel") return <Ban size={16} />;
   if (type === "logistics_urge") return <Truck size={16} />;
   if (type === "return_exchange") return <Box size={16} />;
   if (type === "service_ticket") return <Wrench size={16} />;
@@ -97,6 +110,9 @@ export default function OperationsPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
+  const [resetting, setResetting] = useState(false);
+  const [resetNotice, setResetNotice] = useState("");
+  const [resetError, setResetError] = useState("");
 
   const load = useCallback(async (silent = false) => {
     if (silent) setRefreshing(true); else setLoading(true);
@@ -133,6 +149,24 @@ export default function OperationsPage() {
     setFilters((current) => ({ ...current, [key]: value }));
   }
 
+  async function resetSandbox() {
+    const confirmed = window.confirm("即将重置整个 Sandbox：恢复演示数据，并清空运行时会话、Trace、反馈与评测记录。此操作无法撤销，确认继续吗？");
+    if (!confirmed) return;
+    setResetting(true);
+    setResetNotice("");
+    setResetError("");
+    try {
+      const result = await requestSandboxReset();
+      setSelectedId("");
+      await load(true);
+      setResetNotice(`Sandbox 已重置（${formatTime(result.resetAt)}），统计、列表和详情已刷新。`);
+    } catch (resetFailure) {
+      setResetError(resetFailure instanceof Error ? resetFailure.message : "Sandbox 重置失败，当前数据未刷新。");
+    } finally {
+      setResetting(false);
+    }
+  }
+
   return (
     <main className={styles.page}>
       <header className={styles.header}>
@@ -154,11 +188,15 @@ export default function OperationsPage() {
             <h1>跟进需要人处理的售后任务</h1>
             <p>聚合 OMS、WMS、TMS 与 CRM 的 Sandbox 记录，查看异常、申请和风险会话，并回溯到来源会话 Trace。</p>
           </div>
-          <div className={styles.sandboxBadge}><CircleGauge size={15} /><div><strong>Sandbox / Mock</strong><span>只读视图 · 不处理真实单据</span></div></div>
+          <div className={styles.heroControls}>
+            <div className={styles.sandboxBadge}><CircleGauge size={15} /><div><strong>Sandbox / Mock</strong><span>只读视图 · 不处理真实单据</span></div></div>
+            <button className={styles.resetButton} disabled={resetting} onClick={() => void resetSandbox()}><RotateCcw size={14} className={resetting ? styles.spin : ""} />{resetting ? "正在重置…" : "重置 Sandbox"}</button>
+          </div>
         </section>
 
         <section className={styles.stats} aria-label="运营概览">
           <Stat icon={<TicketCheck size={18} />} label="全部运营记录" value={data?.summary.total ?? 0} />
+          <Stat icon={<PencilLine size={18} />} label="订单变更 / 取消" value={data?.summary.orderOperations ?? 0} />
           <Stat icon={<PackageSearch size={18} />} label="异常订单" value={data?.summary.abnormalOrders ?? 0} tone="amber" />
           <Stat icon={<Clock3 size={18} />} label="待跟进事项" value={data?.summary.pendingCases ?? 0} />
           <Stat icon={<ShieldAlert size={18} />} label="高风险 / 人工接管" value={(data?.summary.highRisk ?? 0) + (data?.summary.humanHandoffs ?? 0)} tone="red" />
@@ -175,6 +213,8 @@ export default function OperationsPage() {
         </section>
 
         {error && <div className={styles.error}><AlertCircle size={15} /><span>{error}</span><button onClick={() => void load()}>重试</button></div>}
+        {resetError && <div className={styles.error}><AlertCircle size={15} /><span>{resetError}</span></div>}
+        {resetNotice && <div className={styles.notice}><CircleGauge size={15} /><span>{resetNotice}</span></div>}
         {data?.sourceHealth === "degraded" && <div className={styles.degraded}><AlertTriangle size={15} /><span>部分数据源读取异常，当前列表可能不完整。{data.sources.filter((source) => source.health === "degraded").map((source) => source.name).join("、")}</span></div>}
 
         <div className={styles.workspace}>
@@ -186,7 +226,7 @@ export default function OperationsPage() {
                 <h3>{item.title}</h3><p>{item.summary}</p>
                 <div className={styles.rowMeta}><span className={`${styles.risk} ${styles[item.riskLevel]}`}>{riskLabels[item.riskLevel]}</span><code>{item.sourceSystem}</code><span>{statusLabels[item.status] ?? item.status}</span><ChevronRight size={14} /></div>
               </button>
-            )) : !error && <div className={styles.empty}><PackageSearch size={30} /><strong>暂无匹配的运营记录</strong><span>{Object.values(filters).some((value) => value && value !== "all") ? "试试放宽筛选条件。" : "完成一次催办、退换或报修后，记录会出现在这里。"}</span><a href="/" target="_blank" rel="noreferrer">打开消费者端<ArrowUpRight size={13} /></a></div>}
+            )) : !error && <div className={styles.empty}><PackageSearch size={30} /><strong>暂无匹配的运营记录</strong><span>{Object.values(filters).some((value) => value && value !== "all") ? "试试放宽筛选条件。" : "完成一次订单变更、取消、催办、退换或报修后，记录会出现在这里。"}</span><a href="/" target="_blank" rel="noreferrer">打开消费者端<ArrowUpRight size={13} /></a></div>}
           </section>
           <section className={styles.detailPanel} aria-label="运营记录详情">
             {selected ? <RecordDetail item={selected} /> : <div className={styles.detailEmpty}><CircleGauge size={30} /><strong>选择一条记录查看详情</strong><span>运营台只展示脱敏业务信息，模型调试数据请前往 Trace。</span></div>}
@@ -217,6 +257,7 @@ function RecordDetail({ item }: { item: OpsRecord }) {
         <div><span>来源系统</span><strong>{item.sourceSystem} · Mock Adapter</strong></div>
         <div><span>来源记录</span><code>{item.sourceRecordId}</code></div>
         <div><span>关联会话</span><code>{item.sessionId ?? "未记录"}</code></div>
+        <div><span>Trace ID</span><code>{item.traceId ?? "未记录"}</code></div>
         <div><span>最后更新</span><strong>{formatTime(item.updatedAt)}</strong></div>
       </section>
 

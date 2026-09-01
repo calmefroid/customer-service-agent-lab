@@ -3,11 +3,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { businessStore } from "@/lib/stores/business/business-store";
 import { getOperationDetail, queryOperations } from "@/lib/operations";
 import type { OpsChannel, OpsFilters, OpsRecordType, OpsRiskLevel } from "@/lib/operations";
+import { listTraceViews } from "@/lib/trace-store";
 
 export const dynamic = "force-dynamic";
 
 const recordTypes = new Set<OpsRecordType>([
   "abnormal_order",
+  "order_change",
+  "order_cancel",
   "logistics_urge",
   "return_exchange",
   "service_ticket",
@@ -21,11 +24,15 @@ function value<T extends string>(input: string | null, allowed: Set<T>): T | "al
   return input && allowed.has(input as T) ? input as T : "all";
 }
 
+function resolveLatestTraceId(sessionId: string): string | null {
+  return listTraceViews({ sessionId }).at(-1)?.traceId ?? null;
+}
+
 export async function GET(request: NextRequest) {
   try {
     const id = request.nextUrl.searchParams.get("id");
     if (id) {
-      const result = getOperationDetail(businessStore, id);
+      const result = getOperationDetail(businessStore, id, resolveLatestTraceId);
       if (!result.item) {
         return NextResponse.json({ error: "未找到该 Sandbox 记录", ...result }, { status: 404 });
       }
@@ -41,7 +48,7 @@ export async function GET(request: NextRequest) {
       from: request.nextUrl.searchParams.get("from") ?? "",
       to: request.nextUrl.searchParams.get("to") ?? "",
     };
-    return NextResponse.json(queryOperations(businessStore, filters));
+    return NextResponse.json(queryOperations(businessStore, filters, resolveLatestTraceId));
   } catch (error) {
     return NextResponse.json({
       error: "运营数据暂时无法读取",
