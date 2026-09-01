@@ -6,7 +6,7 @@ import type { LocalMessage, LocalProgress } from "./types";
 export type StreamTerminal =
   | { kind: "completed" }
   | { kind: "stopped" }
-  | { kind: "error"; message: string; retryable: boolean };
+  | { kind: "error"; message: string; retryable: boolean; code?: string };
 
 export interface StreamState {
   requestId: string;
@@ -81,7 +81,7 @@ export function applyAgentEvent(state: StreamState, event: AgentEvent): StreamSt
         { ...next, pendingUi: undefined },
         event.error.code === "GENERATION_STOPPED"
           ? { kind: "stopped" }
-          : { kind: "error", message: event.error.message, retryable: event.error.retryable },
+          : { kind: "error", message: event.error.message, retryable: event.error.retryable, code: event.error.code },
       );
   }
 }

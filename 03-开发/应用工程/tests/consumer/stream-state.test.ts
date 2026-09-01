@@ -127,7 +127,7 @@ describe("consumer AgentEvent stream state", () => {
 
     expect(state.message).toBeUndefined();
     expect(state.pendingUi).toBeUndefined();
-    expect(state.terminal).toEqual({ kind: "error", message: "提交超时", retryable: true });
+    expect(state.terminal).toEqual({ kind: "error", message: "提交超时", retryable: true, code: "TOOL_TIMEOUT" });
   });
 
   it("returns to an idle, retryable state after local abort", () => {

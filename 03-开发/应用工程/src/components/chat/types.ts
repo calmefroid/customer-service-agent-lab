@@ -18,6 +18,12 @@ export interface LocalProgress {
 
 export type RequestPayload = Omit<ChatRequest, "sessionId">;
 
+export type ChatCallResult =
+  | { status: "completed" }
+  | { status: "stopped" }
+  | { status: "ignored" }
+  | { status: "error"; message: string; retryable: boolean; code?: string };
+
 export interface MessageImage {
   url: string;
   name: string;
