@@ -1,4 +1,6 @@
 import type {
+  ConfirmationCommand,
+  ConfirmationOperation,
   ConfirmationRequest,
   DataSourceMetadata,
   RiskLevel,
@@ -91,6 +93,19 @@ export interface OrderChangeDraft extends Record<string, unknown> {
 export interface OrderChangeRecord extends BusinessRecord, OrderChangeDraft {
   sourceSystem: "OMS";
   changeRequestNo: string;
+  sessionId: string;
+  idempotencyKey: string;
+  status: "submitted";
+}
+
+export interface OrderCancelDraft extends Record<string, unknown> {
+  orderId: string;
+  reason: string;
+}
+
+export interface OrderCancelRecord extends BusinessRecord, OrderCancelDraft {
+  sourceSystem: "OMS";
+  cancelRequestNo: string;
   sessionId: string;
   idempotencyKey: string;
   status: "submitted";
@@ -194,6 +209,57 @@ export interface ConfirmedWrite<TDraft extends Record<string, unknown>> {
   finalSnapshot: Readonly<TDraft>;
 }
 
+export type BusinessWriteRecord =
+  | OrderChangeRecord
+  | OrderCancelRecord
+  | LogisticsUrgeRecord
+  | ReturnExchangeRecord
+  | ServiceTicketRecord;
+
+export type ConfirmationStatus =
+  | "pending"
+  | "modified"
+  | "cancelled"
+  | "expired"
+  | "executing"
+  | "completed"
+  | "failed";
+
+export type ConfirmationResolution =
+  | {
+      action: "modify";
+      confirmationRequestId: string;
+      replacement: ConfirmationRequest;
+    }
+  | {
+      action: "cancel";
+      confirmationRequestId: string;
+    }
+  | {
+      action: "confirm";
+      confirmationRequestId: string;
+      operation: ConfirmationOperation;
+      record: BusinessWriteRecord;
+    };
+
+export interface StoredConfirmation {
+  request: Omit<ConfirmationRequest, "confirmationToken">;
+  tokenDigest: string;
+  status: ConfirmationStatus;
+  finalSnapshot?: Readonly<Record<string, unknown>>;
+  replacementRequestId?: string;
+  result?: ToolResult<ConfirmationResolution>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ResolveConfirmationOptions {
+  signal?: AbortSignal;
+  adapter?: AdapterCallOptions;
+}
+
+export type AnyConfirmationCommand = ConfirmationCommand<Record<string, unknown>>;
+
 export interface ProductMasterAdapter {
   getProduct(sku: string, options?: AdapterCallOptions): Promise<ToolResult<ProductRecord>>;
   searchProducts(query: string, options?: AdapterCallOptions): Promise<ToolResult<ProductRecord[]>>;
@@ -208,6 +274,12 @@ export interface OrderManagementAdapter {
     idempotencyKey: string,
     options?: AdapterCallOptions,
   ): Promise<ToolResult<OrderChangeRecord>>;
+  cancelOrder(
+    draft: OrderCancelDraft,
+    sessionId: string,
+    idempotencyKey: string,
+    options?: AdapterCallOptions,
+  ): Promise<ToolResult<OrderCancelRecord>>;
 }
 
 export interface WarehouseManagementAdapter {

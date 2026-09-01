@@ -11,12 +11,14 @@ import type {
   HumanHandoffRecord,
   LogisticsUrgeRecord,
   OrderChangeRecord,
+  OrderCancelRecord,
   OrderRecord,
   ProductRecord,
   ReturnExchangeRecord,
   ServiceTicketRecord,
   ShipmentRecord,
 } from "@/lib/domain/business";
+import { confirmationStore } from "@/lib/stores/business/confirmation-store";
 
 function clone<T>(value: T): T {
   return structuredClone(value);
@@ -24,6 +26,7 @@ function clone<T>(value: T): T {
 
 type WritableRecord =
   | OrderChangeRecord
+  | OrderCancelRecord
   | LogisticsUrgeRecord
   | ReturnExchangeRecord
   | ServiceTicketRecord;
@@ -34,6 +37,7 @@ export class BusinessStore {
   private fulfillments: FulfillmentRecord[] = [];
   private shipments: ShipmentRecord[] = [];
   private orderChanges: OrderChangeRecord[] = [];
+  private orderCancellations: OrderCancelRecord[] = [];
   private logisticsUrges: LogisticsUrgeRecord[] = [];
   private returnExchanges: ReturnExchangeRecord[] = [];
   private serviceTickets: ServiceTicketRecord[] = [];
@@ -50,11 +54,13 @@ export class BusinessStore {
     this.fulfillments = clone(initialFulfillments);
     this.shipments = clone(initialShipments);
     this.orderChanges = [];
+    this.orderCancellations = [];
     this.logisticsUrges = [];
     this.returnExchanges = [];
     this.serviceTickets = clone(initialServiceTickets);
     this.humanHandoffs = [];
     this.sequences.clear();
+    confirmationStore.reset();
   }
 
   nextId(prefix: string): string {
@@ -103,6 +109,14 @@ export class BusinessStore {
     return clone(this.orderChanges);
   }
 
+  addOrderCancellation(record: OrderCancelRecord): OrderCancelRecord {
+    return this.addIdempotent(this.orderCancellations, record);
+  }
+
+  listOrderCancellations(): OrderCancelRecord[] {
+    return clone(this.orderCancellations);
+  }
+
   addLogisticsUrge(record: LogisticsUrgeRecord): LogisticsUrgeRecord {
     return this.addIdempotent(this.logisticsUrges, record);
   }
@@ -149,6 +163,7 @@ export class BusinessStore {
       this.fulfillments,
       this.shipments,
       this.orderChanges,
+      this.orderCancellations,
       this.logisticsUrges,
       this.returnExchanges,
       this.serviceTickets,

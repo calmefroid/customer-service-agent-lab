@@ -6,3 +6,4 @@ export { wmsMockAdapter } from "@/lib/adapters/wms-mock-adapter";
 export { tmsMockAdapter } from "@/lib/adapters/tms-mock-adapter";
 export { crmMockAdapter } from "@/lib/adapters/crm-mock-adapter";
 export { businessStore } from "@/lib/stores/business/business-store";
+export { ConfirmationStore, confirmationStore } from "@/lib/stores/business/confirmation-store";
