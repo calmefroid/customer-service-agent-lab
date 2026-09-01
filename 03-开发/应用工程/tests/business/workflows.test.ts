@@ -93,7 +93,7 @@ describe("business after-sales workflows", () => {
     expect(businessStore.listReturnExchanges()).toHaveLength(1);
   });
 
-  it("工单写入失败不返回伪造工单号，重试仍可使用原幂等键", async () => {
+  it("工单写入失败不返回伪造工单号，重放返回原失败结果", async () => {
     const draft: ServiceTicketDraft = {
       serviceType: "repair",
       product: "悦享系列 LED 吸顶灯",
@@ -113,12 +113,9 @@ describe("business after-sales workflows", () => {
     if (failed.status !== "success") expect(failed.data).toBeNull();
     expect(businessStore.listServiceTickets()).toHaveLength(1);
 
-    const retried = await service.submitServiceTicket(verifiedContext, write);
-    expect(retried.status).toBe("success");
-    if (retried.status === "success") {
-      expect(retried.data.issueDescription).toBe("用户最终确认：重启后仍然闪烁");
-    }
-    expect(businessStore.listServiceTickets()).toHaveLength(2);
+    const replayed = await service.submitServiceTicket(verifiedContext, write);
+    expect(replayed).toEqual(failed);
+    expect(businessStore.listServiceTickets()).toHaveLength(1);
   });
 
   it("高风险普通工单被拒绝，人工接管保留摘要对象", async () => {

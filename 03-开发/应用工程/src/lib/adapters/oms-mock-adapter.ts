@@ -1,4 +1,4 @@
-import type { OrderChangeRecord, OrderManagementAdapter } from "@/lib/domain/business";
+import type { OrderCancelRecord, OrderChangeRecord, OrderManagementAdapter } from "@/lib/domain/business";
 import { businessError, executeMock } from "@/lib/adapters/mock-adapter-utils";
 import { businessStore } from "@/lib/stores/business/business-store";
 
@@ -53,6 +53,44 @@ export class OmsMockAdapter implements OrderManagementAdapter {
         updatedAt: now,
       };
       const saved = businessStore.addOrderChange(record);
+      return { data: saved, records: [saved] };
+    });
+  }
+
+  cancelOrder(
+    draft: Parameters<OrderManagementAdapter["cancelOrder"]>[0],
+    sessionId: string,
+    idempotencyKey: string,
+    options?: Parameters<OrderManagementAdapter["cancelOrder"]>[3],
+  ) {
+    const order = businessStore.getOrder(draft.orderId);
+    if (!order) return Promise.resolve(businessError<OrderCancelRecord>("OMS", "NOT_FOUND", "订单不存在"));
+    if (!draft.reason.trim()) {
+      return Promise.resolve(businessError<OrderCancelRecord>("OMS", "INVALID_INPUT", "取消原因不能为空"));
+    }
+    if (!["paid", "allocated"].includes(order.status)) {
+      return Promise.resolve(
+        businessError<OrderCancelRecord>("OMS", "BUSINESS_REJECTED", "订单已进入履约或结束状态，不可取消", {
+          orderStatus: order.status,
+        }),
+      );
+    }
+
+    return executeMock("OMS", options, () => {
+      const now = new Date().toISOString();
+      const requestNo = businessStore.nextId("CX20260901");
+      const record: OrderCancelRecord = {
+        ...draft,
+        recordId: requestNo,
+        cancelRequestNo: requestNo,
+        sourceSystem: "OMS",
+        sessionId,
+        idempotencyKey,
+        status: "submitted",
+        createdAt: now,
+        updatedAt: now,
+      };
+      const saved = businessStore.addOrderCancellation(record);
       return { data: saved, records: [saved] };
     });
   }
