@@ -86,7 +86,10 @@ describe("mock orchestrator", () => {
       action: "prepare_logistics_urge",
     });
 
-    expect(response.ui?.kind).toBe("logistics_urge_confirm");
+    expect(response.ui?.kind).toBe("confirmation");
+    if (response.ui?.kind === "confirmation") {
+      expect(response.ui.request.operation).toBe("logistics_urge");
+    }
     expect(listTraces("test-session")[0].steps).toContain("等待用户确认");
     expect(listTraces("test-session")[0].sources.map((source) => source.recordId)).not.toContain(
       "URGE20260820009",
@@ -126,10 +129,11 @@ describe("mock orchestrator", () => {
       attachment: { name: "damage.jpg", type: "image/jpeg", size: 1024 },
     });
 
-    expect(response.ui?.kind).toBe("return_confirm");
+    expect(response.ui?.kind).toBe("confirmation");
     expect(listTraces("test-session")[0].inputSummary).toContain("damage.jpg");
-    if (response.ui?.kind === "return_confirm") {
-      expect(response.ui.form.pickupAddress).toBeTruthy();
+    if (response.ui?.kind === "confirmation") {
+      expect(response.ui.request.operation).toBe("return_exchange_create");
+      expect(response.ui.request.draftSnapshot.pickupAddress).toBeTruthy();
     }
   });
 
@@ -183,7 +187,11 @@ describe("mock orchestrator", () => {
       action: "prepare_service_ticket",
     });
 
-    expect(response.ui?.kind).toBe("service_ticket_form");
+    expect(response.ui?.kind).toBe("confirmation");
+    if (response.ui?.kind === "confirmation") {
+      expect(response.ui.request.operation).toBe("service_ticket_create");
+      expect(response.ui.request.draftSnapshot.serviceType).toBe("repair");
+    }
     expect(listTraces("test-session")[0].steps).toContain("等待用户确认");
     expect(listTraces("test-session")[0].sources).toHaveLength(0);
   });
@@ -246,9 +254,10 @@ describe("mock orchestrator", () => {
     });
 
     expect(response.intent).toBe("service_ticket_create");
-    expect(response.ui?.kind).toBe("service_ticket_form");
-    if (response.ui?.kind === "service_ticket_form") {
-      expect(response.ui.form.serviceType).toBe("安装服务");
+    expect(response.ui?.kind).toBe("confirmation");
+    if (response.ui?.kind === "confirmation") {
+      expect(response.ui.request.operation).toBe("service_ticket_create");
+      expect(response.ui.request.draftSnapshot.serviceType).toBe("installation");
     }
     expect(listTraces("test-session")[0].route.topic).toBe("installation.appointment");
   });

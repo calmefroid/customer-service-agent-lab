@@ -59,6 +59,23 @@ describe("stage-3 confirmation protocol", () => {
     await expect(response.json()).resolves.toMatchObject({ code: "CONFIRMATION_OPERATION_FORBIDDEN" });
   });
 
+  it.each([
+    ["sync", chat],
+    ["stream", streamChat],
+  ] as const)("rejects legacy public write actions at the %s Chat API boundary", async (_name, handler) => {
+    const response = await handler(new Request("http://localhost/api/chat", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "S-confirmation-legacy",
+        message: "确认提交",
+        action: "submit_logistics_urge",
+      }),
+    }));
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ code: "CONFIRMATION_REQUIRED" });
+  });
+
   it("uses the existing AgentEvent.ui channel for a formal ConfirmationRequest", () => {
     const request: ConfirmationRequest = {
       confirmationRequestId: "confirmation-001",

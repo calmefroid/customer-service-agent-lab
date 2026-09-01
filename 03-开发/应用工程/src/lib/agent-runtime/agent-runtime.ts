@@ -11,6 +11,7 @@ import type {
 } from "@/lib/contracts";
 import { PUBLIC_CONTRACT_VERSION } from "@/lib/contracts";
 import { ModelAdapterError } from "@/lib/models";
+import { AgentWorkflowError } from "@/lib/orchestration/workflow-error";
 import { InMemorySessionStore, type ImageObservation } from "@/lib/sessions";
 
 import { fallbackRoute, parseStructuredRoute, ROUTER_SYSTEM_PROMPT, ROUTE_RESPONSE_SCHEMA } from "./route-schema";
@@ -86,6 +87,7 @@ function chunks(message: string, size = 8): string[] {
 }
 
 function mapModelError(error: unknown): AgentPublicError {
+  if (error instanceof AgentWorkflowError) return error.publicError;
   if (error instanceof ModelAdapterError) {
     if (error.code === "cancelled") return { code: "GENERATION_STOPPED", message: "已停止生成", retryable: false };
     if (error.code === "timeout") return { code: "MODEL_TIMEOUT", message: "模型响应超时，请重试", retryable: true };
@@ -617,7 +619,9 @@ export class AgentRuntime {
           status: "failed",
           payload: {
             ...publicError,
-            internalCode: error instanceof ModelAdapterError
+            internalCode: error instanceof AgentWorkflowError
+              ? error.internalCode
+              : error instanceof ModelAdapterError
               ? `MODEL_${error.code.toUpperCase()}`
               : error instanceof Error ? error.name : "UNKNOWN_RUNTIME_ERROR",
           },

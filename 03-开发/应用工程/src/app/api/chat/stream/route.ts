@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { validateAttachment } from "@/lib/agent-runtime/attachment-validation";
 import { createConfiguredAgentRuntime } from "@/lib/agent-runtime/configured-runtime";
-import { validateConfirmationCommand } from "@/lib/confirmation-protocol";
+import { isLegacyWriteAction, validateConfirmationCommand } from "@/lib/confirmation-protocol";
 import type { AgentEvent, ChatRequest } from "@/lib/contracts";
 import { unifiedTraceSink } from "@/lib/trace-store";
 
@@ -18,14 +18,6 @@ function validateChatRequest(body: Partial<ChatRequest>): string | undefined {
   if (typeof body.message !== "string") return "message 必须为字符串";
   const attachmentError = validateAttachment(body.attachment);
   if (attachmentError) return attachmentError;
-  if (body.action === "submit_return") {
-    const form = body.formData;
-    if (!form || ![form.product, form.issueDescription, form.contactPhone, form.pickupAddress].every((value) => typeof value === "string" && value.trim())) return "退换货申请信息不完整";
-  }
-  if (body.action === "submit_service_ticket") {
-    const form = body.serviceFormData;
-    if (!form || ![form.product, form.faultDescription, form.contactPhone, form.serviceAddress, form.preferredContactTime].every((value) => typeof value === "string" && value.trim())) return "售后报修信息不完整";
-  }
   return undefined;
 }
 
@@ -44,6 +36,9 @@ export async function POST(request: Request) {
   if (validationError) return invalidRequest(validationError);
   const confirmationValidation = validateConfirmationCommand(body.confirmation, body.action);
   if (!confirmationValidation.ok) return invalidRequest(confirmationValidation.message, confirmationValidation.code);
+  if (isLegacyWriteAction(body.action)) {
+    return invalidRequest("写操作必须使用服务端签发的 ConfirmationRequest", "CONFIRMATION_REQUIRED");
+  }
 
   const agent = createConfiguredAgentRuntime({ traceSink: unifiedTraceSink });
   const chatRequest = body as ChatRequest;

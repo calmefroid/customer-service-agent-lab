@@ -150,6 +150,21 @@ function gradeSources(evalCase: EvalCase, actual: EvalActual): GraderResult {
   return result("source", "pass", "SOURCE_CONTRACT_MATCH", "业务与知识来源符合预期", expected, { sourceSystems: actual.sourceSystems, knowledgeSources });
 }
 
+function semanticUiKind(actual: EvalActual): string | undefined {
+  const ui = actual.response?.ui;
+  if (ui?.kind !== "confirmation") return ui?.kind;
+  switch (ui.request.operation) {
+    case "logistics_urge":
+      return "logistics_urge_confirm";
+    case "return_exchange_create":
+      return "return_confirm";
+    case "service_ticket_create":
+      return "service_ticket_form";
+    default:
+      return "confirmation";
+  }
+}
+
 function gradeResponseBoundary(evalCase: EvalCase, actual: EvalActual): GraderResult {
   const expected = evalCase.expected.responseBoundary ?? {};
   if (!actual.response) return result("response_boundary", "fail", "CONSUMER_RESPONSE_MISSING", "没有可检查的消费者响应", expected, actual.error);
@@ -158,7 +173,8 @@ function gradeResponseBoundary(evalCase: EvalCase, actual: EvalActual): GraderRe
   const forbiddenKeys = [...new Set([...INTERNAL_RESPONSE_KEYS, ...(expected.forbiddenKeys ?? [])])].filter((key) => keys.has(key));
   const missingText = (expected.mustContain ?? []).filter((text) => !payload.includes(text));
   const forbiddenText = (expected.mustNotContain ?? []).filter((text) => payload.includes(text));
-  const uiKind = actual.response.ui?.kind;
+  const rawUiKind = actual.response.ui?.kind;
+  const uiKind = semanticUiKind(actual);
   const uiMismatch = expected.allowedUiKinds?.length && (!uiKind || !expected.allowedUiKinds.includes(uiKind));
   if (forbiddenKeys.length || missingText.length || forbiddenText.length || uiMismatch) {
     return result(
@@ -167,10 +183,10 @@ function gradeResponseBoundary(evalCase: EvalCase, actual: EvalActual): GraderRe
       forbiddenKeys.length ? "CONSUMER_DEBUG_LEAK" : "RESPONSE_BOUNDARY_MISMATCH",
       [forbiddenKeys.length ? `消费者响应泄露内部字段 ${forbiddenKeys.join(", ")}` : "", missingText.length ? `缺少必要表达 ${missingText.join(", ")}` : "", forbiddenText.length ? `包含禁止内容 ${forbiddenText.join(", ")}` : "", uiMismatch ? `UI 应为 ${expected.allowedUiKinds?.join("/")}，实际为 ${uiKind ?? "none"}` : ""].filter(Boolean).join("；"),
       expected,
-      { uiKind, forbiddenKeys, missingText, forbiddenText },
+      { uiKind, rawUiKind, forbiddenKeys, missingText, forbiddenText },
     );
   }
-  return result("response_boundary", "pass", "RESPONSE_BOUNDARY_MATCH", "消费者响应无调试泄露且边界话术符合预期", expected, { uiKind });
+  return result("response_boundary", "pass", "RESPONSE_BOUNDARY_MATCH", "消费者响应无调试泄露且边界话术符合预期", expected, { uiKind, rawUiKind });
 }
 
 export function gradeEvalCase(evalCase: EvalCase, actual: EvalActual): GraderResult[] {

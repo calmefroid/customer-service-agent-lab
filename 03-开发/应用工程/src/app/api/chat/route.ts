@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { validateAttachment } from "@/lib/agent-runtime/attachment-validation";
 import { createConfiguredAgentRuntime } from "@/lib/agent-runtime/configured-runtime";
-import { validateConfirmationCommand } from "@/lib/confirmation-protocol";
+import { isLegacyWriteAction, validateConfirmationCommand } from "@/lib/confirmation-protocol";
 import type { AgentPublicError, ChatRequest, ChatResponse } from "@/lib/contracts";
 import { unifiedTraceSink } from "@/lib/trace-store";
 
@@ -29,36 +29,14 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
+  if (isLegacyWriteAction(body.action)) {
+    return NextResponse.json(
+      { error: "写操作必须使用服务端签发的 ConfirmationRequest", code: "CONFIRMATION_REQUIRED" },
+      { status: 400 },
+    );
+  }
   const attachmentError = validateAttachment(body.attachment);
   if (attachmentError) return NextResponse.json({ error: attachmentError }, { status: 400 });
-  if (body.action === "submit_return") {
-    const form = body.formData;
-    const complete =
-      form &&
-      (form.serviceType === "换货" || form.serviceType === "退货") &&
-      [form.product, form.issueDescription, form.contactPhone, form.pickupAddress]
-        .every((value) => typeof value === "string" && value.trim().length > 0);
-    if (!complete) {
-      return NextResponse.json({ error: "退换货申请信息不完整" }, { status: 400 });
-    }
-  }
-  if (body.action === "submit_service_ticket") {
-    const form = body.serviceFormData;
-    const complete =
-      form &&
-      (form.serviceType === "维修服务" || form.serviceType === "安装服务") &&
-      (form.purchaseChannel === "线上商城" || form.purchaseChannel === "线下门店") &&
-      [
-        form.product,
-        form.faultDescription,
-        form.contactPhone,
-        form.serviceAddress,
-        form.preferredContactTime,
-      ].every((value) => typeof value === "string" && value.trim().length > 0);
-    if (!complete) {
-      return NextResponse.json({ error: "售后报修信息不完整" }, { status: 400 });
-    }
-  }
 
   const agent = createConfiguredAgentRuntime({ traceSink: unifiedTraceSink });
   let finalResponse: ChatResponse | undefined;

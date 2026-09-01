@@ -10,7 +10,7 @@ const legacyMockModule: OrchestrationModule = {
   priority: -100,
   phases: ["router", "guardrail", "workflow", "tool_or_rag", "output"],
   supports: () => true,
-  execute: ({ request, traceId, route }) => orchestrateMock(request, { traceId, route }),
+  execute: ({ request, traceId, route, signal }) => orchestrateMock(request, { traceId, route, signal }),
 };
 
 agentModuleRegistry.register(legacyMockModule);

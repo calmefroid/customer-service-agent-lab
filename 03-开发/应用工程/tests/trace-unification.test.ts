@@ -4,6 +4,7 @@ import { DELETE, GET } from "@/app/api/trace/route";
 import { POST as streamChat } from "@/app/api/chat/stream/route";
 import { defaultRuntimeTraceStore } from "@/lib/agent-runtime/runtime-singletons";
 import { PUBLIC_CONTRACT_VERSION, type AgentEvent, type TraceEvent } from "@/lib/contracts";
+import { businessStore } from "@/lib/stores/business/business-store";
 import {
   appendTraceEvent,
   clearTraces,
@@ -35,7 +36,10 @@ function modelEvent(overrides: Partial<TraceEvent> = {}): TraceEvent {
 }
 
 describe("unified TraceEvent architecture", () => {
-  beforeEach(() => clearTraces());
+  beforeEach(() => {
+    clearTraces();
+    businessStore.reset();
+  });
 
   it("keeps Runtime, business projection and consumer response on one traceId", async () => {
     const response = await streamChat(new Request("http://localhost/api/chat/stream", {
@@ -95,13 +99,36 @@ describe("unified TraceEvent architecture", () => {
   });
 
   it("records confirmed business writes on the Runtime trace and clears every trace store", async () => {
+    const prepareResponse = await streamChat(new Request("http://localhost/api/chat/stream", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sessionId: "S-confirmation-trace", message: "准备物流催办", action: "prepare_logistics_urge" }),
+    }));
+    const prepared = parseAgentEvents(await prepareResponse.text()).find((event) => event.type === "final");
+    if (prepared?.type !== "final" || prepared.response.ui?.kind !== "confirmation") {
+      throw new Error("CONFIRMATION_REQUEST_MISSING");
+    }
+    const confirmationRequest = prepared.response.ui.request;
+
     const response = await streamChat(new Request("http://localhost/api/chat/stream", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ sessionId: "S-confirmation-trace", message: "确认催物流", action: "submit_logistics_urge" }),
+      body: JSON.stringify({
+        sessionId: "S-confirmation-trace",
+        message: "确认催物流",
+        confirmation: {
+          confirmationRequestId: confirmationRequest.confirmationRequestId,
+          confirmationToken: confirmationRequest.confirmationToken,
+          idempotencyKey: confirmationRequest.idempotencyKey,
+          action: "confirm",
+          finalSnapshot: confirmationRequest.draftSnapshot,
+        },
+      }),
     }));
     const final = parseAgentEvents(await response.text()).find((event) => event.type === "final");
     if (final?.type !== "final") throw new Error("FINAL_EVENT_MISSING");
+    expect(final.response.ui?.kind).toBe("logistics_urge_success");
+    expect(businessStore.listLogisticsUrges()).toHaveLength(1);
 
     const traceEvents = listTraceEvents({ traceId: final.response.traceId });
     const confirmations = traceEvents.filter(

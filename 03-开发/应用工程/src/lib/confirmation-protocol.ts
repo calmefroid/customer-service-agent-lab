@@ -8,6 +8,7 @@ export const CONFIRMATION_PROTOCOL_ERROR_CODES = [
   "INVALID_CONFIRMATION_COMMAND",
   "CONFIRMATION_OPERATION_FORBIDDEN",
   "CONFIRMATION_ACTION_CONFLICT",
+  "CONFIRMATION_REQUIRED",
   "CONFIRMATION_SNAPSHOT_REQUIRED",
   "CONFIRMATION_CANCEL_SNAPSHOT_FORBIDDEN",
 ] as const;
@@ -25,6 +26,16 @@ const COMMAND_KEYS = new Set([
   "action",
   "finalSnapshot",
 ]);
+
+const LEGACY_WRITE_ACTIONS = new Set([
+  "submit_return",
+  "submit_logistics_urge",
+  "submit_service_ticket",
+]);
+
+export function isLegacyWriteAction(value: unknown): boolean {
+  return typeof value === "string" && LEGACY_WRITE_ACTIONS.has(value);
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));

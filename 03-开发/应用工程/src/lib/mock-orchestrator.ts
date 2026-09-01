@@ -13,16 +13,20 @@ import type {
   ChatRequest,
   ChatResponse,
   ConfirmationDecision,
+  ConfirmationOperation,
   ConfirmationRequest,
   DataSourceMetadata,
   Intent,
   RiskLevel,
   RouteDecision,
+  ToolResult,
   TraceDebugContext,
   TraceStage,
   TraceSource,
 } from "@/lib/contracts";
 import type {
+  BusinessWriteRecord,
+  ConfirmationResolution,
   ConfirmedWrite,
   LogisticsUrgeDraft,
   ReturnExchangeDraft,
@@ -32,6 +36,8 @@ import type {
 import type { AdapterCallOptions } from "@/lib/domain/business";
 import { businessWorkflowService } from "@/lib/domain/business-workflow";
 import { DEMO_CUSTOMER_ID } from "@/lib/mock-data/business-fixtures";
+import { AgentWorkflowError } from "@/lib/orchestration/workflow-error";
+import { confirmationStore } from "@/lib/stores/business/confirmation-store";
 import { appendTrace, createTraceWriter } from "@/lib/trace-store";
 
 const safetyPattern = /冒烟|烧焦|触电|火花|异常发热|明显过热|漏电|起火/;
@@ -43,6 +49,7 @@ type InjectedToolOutcome = Exclude<AdapterCallOptions["outcome"], undefined>;
 export interface MockOrchestrationOptions {
   traceId?: string;
   route?: RouteDecision;
+  signal?: AbortSignal;
   toolOutcomes?: {
     latestOrder?: InjectedToolOutcome;
     shipment?: InjectedToolOutcome;
@@ -107,6 +114,70 @@ function traceSources(sources: DataSourceMetadata[]): TraceSource[] {
 
 function toolFailure(result: { error: { code: string; message: string } }): never {
   throw new Error(`${result.error.code}: ${result.error.message}`);
+}
+
+function confirmationIntent(operation: ConfirmationOperation): Intent {
+  if (operation === "logistics_urge") return "logistics_query";
+  if (operation === "return_exchange_create") return "return_exchange";
+  if (operation === "service_ticket_create") return "service_ticket_create";
+  return "other";
+}
+
+function confirmationRoute(operation: ConfirmationOperation, action: "confirm" | "modify" | "cancel"): RouteDecision {
+  const intent = confirmationIntent(operation);
+  const module: RouteDecision["module"] = operation === "logistics_urge"
+    ? "logistics"
+    : operation === "return_exchange_create"
+      ? "return"
+      : operation === "service_ticket_create" ? "repair" : "conversation";
+  return {
+    module,
+    intent,
+    topic: operation === "logistics_urge"
+      ? "logistics.urge"
+      : operation === "return_exchange_create"
+        ? "return.request"
+        : operation === "service_ticket_create" ? "after_sales.repair_process" : "order.change",
+    action: `resolve_confirmation:${action}`,
+    confidence: 1,
+    needsClarification: false,
+    requiresConfirmation: action === "modify",
+    requiresHuman: false,
+    remainingIntents: [],
+    entities: { orderId: null, productId: null, serviceType: null },
+    observations: [],
+  };
+}
+
+function publicConfirmationError(
+  result: Exclude<ToolResult<ConfirmationResolution>, { status: "success" }>,
+  signal?: AbortSignal,
+): AgentWorkflowError {
+  if (signal?.aborted || result.error.code === "CANCELLED" && result.error.message === "CONFIRMATION_ABORTED_BEFORE_TOOL") {
+    return new AgentWorkflowError({ code: "GENERATION_STOPPED", message: "已停止生成", retryable: false }, result.error.message);
+  }
+  const internalCode = /^CONFIRMATION_[A-Z_]+$/.test(result.error.message)
+    ? result.error.message
+    : result.error.code;
+  const messages: Record<string, string> = {
+    CONFIRMATION_EXPIRED: "确认草稿已过期，请重新生成后再提交",
+    CONFIRMATION_NOT_FOUND: "确认草稿不存在或已清理，请重新生成",
+    CONFIRMATION_REPLACED: "该确认草稿已被修改，请使用最新草稿",
+    CONFIRMATION_CANCELLED: "该确认草稿已经取消",
+    CONFIRMATION_TOKEN_INVALID: "确认凭证无效，请重新生成确认草稿",
+    CONFIRMATION_SESSION_MISMATCH: "确认草稿不属于当前会话",
+    CONFIRMATION_IDEMPOTENCY_MISMATCH: "确认请求校验失败，请使用原确认卡重试",
+  };
+  return new AgentWorkflowError({
+    code: internalCode,
+    message: messages[internalCode] ?? result.error.message,
+    retryable: result.error.retryable,
+  }, internalCode);
+}
+
+function traceableStoredRequest(confirmationRequestId: string): ConfirmationRequest | undefined {
+  const stored = confirmationStore.get(confirmationRequestId);
+  return stored ? { ...stored.request, confirmationToken: "***" } : undefined;
 }
 
 async function submitIntegratedLogisticsUrge(request: ChatRequest) {
@@ -207,6 +278,183 @@ async function submitIntegratedServiceTicket(request: ChatRequest, outcome?: Inj
     decidedAt: new Date().toISOString(),
   });
   return { ticketNo: result.data.ticketNo, sources: traceSources(result.meta.sources) };
+}
+
+async function prepareIntegratedLogisticsUrge(request: ChatRequest) {
+  const draft: LogisticsUrgeDraft = {
+    orderId: "OD202608180236",
+    shipmentId: "SHIP-SF14900000628",
+    reason: "物流轨迹长时间未更新",
+  };
+  const result = await businessWorkflowService.prepareLogisticsUrge(workflowContext(request), draft);
+  if (result.status !== "success") throw publicConfirmationError(result);
+  appendConfirmationTrace(request, result.data, "started");
+  return result;
+}
+
+async function prepareIntegratedReturn(request: ChatRequest) {
+  const draft: ReturnExchangeDraft = {
+    orderId: "OD202608100119",
+    serviceType: "exchange",
+    product: "智控系列吸顶灯 ZC80",
+    reason: "灯罩边缘破裂（待人工复核）",
+    itemCondition: "可见裂纹，未通电，责任与资格待人工审核",
+    evidence: [request.attachment?.name ?? "消费者文字说明"],
+    contactPhone: "138****8001",
+    pickupAddress: "上海市浦东新区 XX 路 XX 号",
+  };
+  const result = await businessWorkflowService.prepareReturnExchange(workflowContext(request), draft);
+  if (result.status !== "success") throw publicConfirmationError(result);
+  appendConfirmationTrace(request, result.data, "started");
+  return result;
+}
+
+async function prepareIntegratedServiceTicket(
+  request: ChatRequest,
+  serviceType: "repair" | "installation",
+  issueDescription: string,
+) {
+  const draft: ServiceTicketDraft = {
+    serviceType,
+    product: "悦享系列 LED 吸顶灯",
+    purchaseChannel: "online",
+    issueDescription,
+    contactPhone: "138****8001",
+    serviceAddress: "上海市浦东新区 XX 路 XX 号",
+    preferredContactTime: "工作日 09:00–18:00",
+    riskLevel: "low",
+  };
+  const result = await businessWorkflowService.prepareServiceTicket(workflowContext(request), draft);
+  if (result.status !== "success") throw publicConfirmationError(result);
+  appendConfirmationTrace(request, result.data, "started");
+  return result;
+}
+
+function confirmationRecordUi(operation: ConfirmationOperation, record: BusinessWriteRecord): ChatResponse["ui"] {
+  if (operation === "logistics_urge" && typeof record.urgeRequestNo === "string") {
+    return {
+      kind: "logistics_urge_success",
+      requestNo: record.urgeRequestNo,
+      carrier: "顺丰速运",
+      handoff: "物流平台 + 人工客服",
+    };
+  }
+  if (operation === "return_exchange_create" && typeof record.requestNo === "string") {
+    return { kind: "return_success", requestNo: record.requestNo };
+  }
+  if (operation === "service_ticket_create" && typeof record.ticketNo === "string") {
+    return {
+      kind: "service_ticket_success",
+      ticketNo: record.ticketNo,
+      serviceType: record.serviceType === "installation" ? "安装服务" : "维修服务",
+    };
+  }
+  return undefined;
+}
+
+function confirmationSuccessMessage(operation: ConfirmationOperation, record: BusinessWriteRecord): string {
+  if (operation === "logistics_urge" && "urgeRequestNo" in record) return `物流催办已提交，催办编号 ${record.urgeRequestNo}。`;
+  if (operation === "return_exchange_create" && "requestNo" in record) return `退换申请已提交，申请编号 ${record.requestNo}。`;
+  if (operation === "service_ticket_create" && "ticketNo" in record) return `${record.serviceType === "installation" ? "安装" : "维修"}工单已提交，工单编号 ${record.ticketNo}。`;
+  if (operation === "order_change" && "changeRequestNo" in record) return `订单变更申请已提交，申请编号 ${record.changeRequestNo}。`;
+  if (operation === "order_cancel" && "cancelRequestNo" in record) return `订单取消申请已提交，申请编号 ${record.cancelRequestNo}。`;
+  return "写操作已确认并提交。";
+}
+
+async function resolveIntegratedConfirmation(
+  request: ChatRequest & { confirmation: NonNullable<ChatRequest["confirmation"]> },
+  options: MockOrchestrationOptions,
+): Promise<ChatResponse> {
+  const storedBefore = confirmationStore.get(request.confirmation.confirmationRequestId);
+  const operation = storedBefore?.request.operation;
+  const traceRequest = traceableStoredRequest(request.confirmation.confirmationRequestId);
+  if (traceRequest) appendConfirmationTrace(request, traceRequest, "started");
+
+  const result = await businessWorkflowService.resolveConfirmation(
+    workflowContext(request),
+    request.confirmation,
+    { signal: options.signal },
+  );
+  if (result.status !== "success") {
+    if (traceRequest) {
+      appendConfirmationTrace(request, traceRequest, "failed", {
+        confirmationRequestId: request.confirmation.confirmationRequestId,
+        action: request.confirmation.action,
+        ...(request.confirmation.action === "cancel" ? {} : { finalSnapshot: request.confirmation.finalSnapshot }),
+        decidedAt: new Date().toISOString(),
+      });
+    }
+    throw publicConfirmationError(result, options.signal);
+  }
+
+  const resolvedOperation = result.data.action === "confirm" ? result.data.operation : operation;
+  if (!resolvedOperation) {
+    throw new AgentWorkflowError({ code: "CONFIRMATION_NOT_FOUND", message: "确认草稿不存在或已清理，请重新生成", retryable: false });
+  }
+  routeOverrides.set(request, confirmationRoute(resolvedOperation, result.data.action));
+  if (traceRequest) {
+    appendConfirmationTrace(request, traceRequest, "completed", {
+      confirmationRequestId: request.confirmation.confirmationRequestId,
+      action: request.confirmation.action,
+      ...(request.confirmation.action === "cancel" ? {} : { finalSnapshot: request.confirmation.finalSnapshot }),
+      decidedAt: new Date().toISOString(),
+    });
+  }
+
+  if (result.data.action === "modify") {
+    appendConfirmationTrace(request, result.data.replacement, "started");
+    const message = "修改已保存，请确认最新草稿后再提交。";
+    return {
+      message,
+      intent: confirmationIntent(resolvedOperation),
+      riskLevel: "medium",
+      traceId: createTrace(request, confirmationIntent(resolvedOperation), "medium", message, ["校验原确认请求", "保存最终修改", "签发新确认请求"], traceSources(result.meta.sources)),
+      ui: { kind: "confirmation", request: result.data.replacement },
+    };
+  }
+
+  if (result.data.action === "cancel") {
+    const message = "已取消本次操作，没有写入任何业务记录。";
+    return {
+      message,
+      intent: confirmationIntent(resolvedOperation),
+      riskLevel: "medium",
+      traceId: createTrace(request, confirmationIntent(resolvedOperation), "medium", message, ["校验确认请求", "取消待确认操作", "保持业务数据不变"], []),
+    };
+  }
+
+  const message = confirmationSuccessMessage(result.data.operation, result.data.record);
+  const recordId = result.data.record.recordId;
+  return {
+    message,
+    intent: confirmationIntent(result.data.operation),
+    riskLevel: "medium",
+    traceId: createTrace(
+      request,
+      confirmationIntent(result.data.operation),
+      "medium",
+      message,
+      ["校验服务端确认请求", "执行一次写工具", "返回业务编号"],
+      traceSources(result.meta.sources),
+      [
+        decisionStage("confirmation", "校验正式确认协议", `服务端按 ${request.confirmation.confirmationRequestId} 解析 operation 并完成令牌、幂等与快照校验。`, 12, "guardrail"),
+        toolStage("write", "执行确认后的业务写入", `写工具成功返回业务记录 ${recordId}。`, result.meta.durationMs, {
+          system: result.data.record.sourceSystem,
+          toolName: `resolve_${result.data.operation}`,
+          operation: result.data.operation,
+          method: "POST",
+          endpoint: "/internal/confirmation/resolve",
+          input: { confirmation_request_id: request.confirmation.confirmationRequestId, operation_source: "server_store" },
+          output: { outcome: "success", record_id: recordId },
+          statusCode: 201,
+        }),
+        decisionStage("output", "返回确认结果", message, 8, "output"),
+      ],
+    ),
+    ...(confirmationRecordUi(result.data.operation, result.data.record)
+      ? { ui: confirmationRecordUi(result.data.operation, result.data.record) }
+      : {}),
+  };
 }
 
 async function submitIntegratedHandoff(
@@ -531,11 +779,18 @@ export async function orchestrateMock(
 ): Promise<ChatResponse> {
   traceIdOverrides.set(request, options.traceId ?? `TR-ORCH-${crypto.randomUUID()}`);
   if (options.route) routeOverrides.set(request, options.route);
+  if (request.confirmation) {
+    return resolveIntegratedConfirmation(
+      request as ChatRequest & { confirmation: NonNullable<ChatRequest["confirmation"]> },
+      options,
+    );
+  }
   const intent = options.route?.intent ?? detectIntent(request.message, request);
 
   if (intent === "logistics_query" && request.action !== "confirm_identity") {
     if (request.action === "prepare_logistics_urge") {
       const order = await getLatestOrder();
+      const prepared = await prepareIntegratedLogisticsUrge(request);
       const message = "可以为你发起物流催办。请确认下面的订单与最新物流状态，确认后将同步物流平台和人工客服。";
       return {
         message,
@@ -563,13 +818,7 @@ export async function orchestrateMock(
             decisionStage("confirm", "生成催办确认摘要", "已取得当前状态，但尚未执行写操作；向用户展示订单、运单和最新节点并等待确认。", 29, "output"),
           ],
         ),
-        ui: {
-          kind: "logistics_urge_confirm",
-          orderId: order.data.id,
-          carrier: order.data.carrier,
-          trackingNo: order.data.trackingNo,
-          latestStatus: order.data.events[0]?.text ?? order.data.status,
-        },
+        ui: { kind: "confirmation", request: prepared.data },
       };
     }
 
@@ -949,6 +1198,7 @@ export async function orchestrateMock(
 
   if (intent === "return_exchange" && request.attachment) {
     const returnKnowledge = await searchKnowledge("return");
+    const prepared = await prepareIntegratedReturn(request);
     const message =
       "从照片中看到灯罩边缘有一处明显裂纹。破损原因和责任无法仅凭照片确认，我已整理一份换货申请草稿。";
     return {
@@ -987,16 +1237,7 @@ export async function orchestrateMock(
           decisionStage("draft", "生成可编辑申请草稿", "根据可见问题与规则生成换货草稿；联系方式和取件地址使用账号中的脱敏 Mock 数据，提交前必须由用户确认。", 41, "output"),
         ],
       ),
-      ui: {
-        kind: "return_confirm",
-        form: {
-          serviceType: "换货",
-          product: "悦享系列 LED 吸顶灯",
-          issueDescription: "灯罩边缘破裂（待人工复核）",
-          contactPhone: "138****6821",
-          pickupAddress: "上海市浦东新区 XX 路 XX 号",
-        },
-      },
+      ui: { kind: "confirmation", request: prepared.data },
     };
   }
 
@@ -1293,6 +1534,11 @@ export async function orchestrateMock(
     const reportedIssue = request.message.replace(/^准备售后报修[:：]/, "").trim();
     const isInstallation = /安装/.test(request.message);
     const serviceType = isInstallation ? "安装服务" as const : "维修服务" as const;
+    const prepared = await prepareIntegratedServiceTicket(
+      request,
+      isInstallation ? "installation" : "repair",
+      isInstallation ? "预约专业师傅上门安装" : reportedIssue || "灯具故障，按建议排查后仍未恢复",
+    );
     const message = isInstallation
       ? "我已整理一份上门安装服务单。服务类型、商品、地址和联系时间都可以修改，确认无误后再提交。"
       : "我已根据刚才的故障描述整理报修单。信息可以修改，确认无误后再提交。";
@@ -1313,18 +1559,7 @@ export async function orchestrateMock(
           decisionStage("draft", "生成可编辑服务单", "使用商品 Mock 主数据和账号脱敏信息填充草稿，等待用户确认提交。", 31, "output"),
         ],
       ),
-      ui: {
-        kind: "service_ticket_form",
-        form: {
-          serviceType,
-          product: "悦享系列 LED 吸顶灯",
-          purchaseChannel: "线上商城",
-          faultDescription: isInstallation ? "预约专业师傅上门安装" : reportedIssue || "灯具故障，按建议排查后仍未恢复",
-          contactPhone: "138****6821",
-          serviceAddress: "上海市浦东新区 XX 路 XX 号",
-          preferredContactTime: "工作日 09:00–18:00",
-        },
-      },
+      ui: { kind: "confirmation", request: prepared.data },
     };
   }
 
