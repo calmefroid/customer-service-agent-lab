@@ -11,9 +11,10 @@ import {
   TriangleAlert,
 } from "lucide-react";
 
-import type { ChatUi, OrderView, ReturnFormData, ServiceTicketFormData } from "@/lib/contracts";
+import type { ChatUi, ConfirmationDecisionAction, ConfirmationRequest, OrderView, ReturnFormData, ServiceTicketFormData } from "@/lib/contracts";
 
-import { ConfirmationActions, ReturnConfirmCard, ServiceTicketFormCard } from "./ConfirmationCards";
+import { ConfirmationActions, ReturnConfirmCard, ServiceTicketFormCard, UnifiedConfirmationCard } from "./ConfirmationCards";
+import type { ConfirmationSnapshot, ConfirmationTransportResult } from "./confirmation-flow";
 
 export interface UiCardActions {
   onIdentity: () => void;
@@ -28,6 +29,12 @@ export interface UiCardActions {
   onTroubleshootingResolved: () => void;
   onCancelConfirmation: () => void;
   onEditConfirmation: () => void;
+  onConfirmationDecision: (
+    request: ConfirmationRequest,
+    action: ConfirmationDecisionAction,
+    finalSnapshot?: Readonly<ConfirmationSnapshot>,
+  ) => Promise<ConfirmationTransportResult>;
+  onRegenerateConfirmation: () => Promise<ConfirmationTransportResult>;
 }
 
 export function UiCard({ ui, busy, actions }: { ui: ChatUi; busy: boolean; actions: UiCardActions }) {
@@ -63,6 +70,15 @@ export function UiCard({ ui, busy, actions }: { ui: ChatUi; busy: boolean; actio
   );
 
   if (ui.kind === "service_menu") return null;
+
+  if (ui.kind === "confirmation") return (
+    <UnifiedConfirmationCard
+      request={ui.request}
+      busy={busy}
+      onDecision={actions.onConfirmationDecision}
+      onRegenerate={actions.onRegenerateConfirmation}
+    />
+  );
 
   if (ui.kind === "identity_confirm") {
     const serviceQuery = ui.purpose === "service";

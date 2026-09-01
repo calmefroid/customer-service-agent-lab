@@ -16,6 +16,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Composer } from "@/components/chat/Composer";
 import { FeedbackSheet } from "@/components/chat/Feedback";
+import { createConfirmationCommand, type ConfirmationSnapshot, type ConfirmationTransportResult } from "@/components/chat/confirmation-flow";
 import { BotAvatar, MessageItem } from "@/components/chat/MessageItem";
 import { ProgressCard } from "@/components/chat/ProgressCard";
 import { createRetryMessage } from "@/components/chat/retry-message";
@@ -26,12 +27,14 @@ import {
   finishStream,
   type StreamState,
 } from "@/components/chat/stream-state";
-import type { LocalMessage, PendingAttachment, RequestPayload } from "@/components/chat/types";
+import type { ChatCallResult, LocalMessage, PendingAttachment, RequestPayload } from "@/components/chat/types";
 import type { UiCardActions } from "@/components/chat/UiCard";
 import type {
   AttachmentMeta,
   ChatRequest,
   ChatUi,
+  ConfirmationDecisionAction,
+  ConfirmationRequest,
   OrderView,
   ReturnFormData,
   ServiceModule,
@@ -118,11 +121,13 @@ export default function Home() {
   async function callChat(
     payload: RequestPayload,
     options: { userMessageId?: string; replaceUiKind?: ChatUi["kind"] } = {},
-  ) {
+  ): Promise<ChatCallResult> {
     const requestId = createId("request");
     const controller = new AbortController();
     const requestSessionId = sessionRef.current;
     let stream = createStreamState(requestId);
+    let responseErrorCode: string | undefined;
+    let responseRetryable = true;
     abortRef.current = controller;
     setActiveStream(stream);
     setBusy(true);
@@ -135,10 +140,12 @@ export default function Home() {
         signal: controller.signal,
       });
       if (!response.ok) {
+        responseRetryable = response.status >= 500 || response.status === 408 || response.status === 429;
         let reason = "服务暂时不可用";
         try {
-          const body = await response.json() as { error?: string };
+          const body = await response.json() as { error?: string; code?: string };
           if (body.error) reason = body.error;
+          responseErrorCode = body.code;
         } catch {
           // Keep the public fallback message.
         }
@@ -162,7 +169,7 @@ export default function Home() {
         stream,
         controller.signal.aborted
           ? { kind: "stopped" }
-          : { kind: "error", message: error instanceof Error ? error.message : "服务连接失败", retryable: true },
+          : { kind: "error", message: error instanceof Error ? error.message : "服务连接失败", retryable: responseRetryable, ...(responseErrorCode ? { code: responseErrorCode } : {}) },
       );
     } finally {
       const progressMessage: LocalMessage | undefined = stream.progress ? {
@@ -195,13 +202,24 @@ export default function Home() {
             retryable: stopped || terminal?.kind === "error" && terminal.retryable,
             stopped,
           },
-          retryRequest: payload,
+          retryRequest: payload.confirmation ? undefined : payload,
         }];
       });
       abortRef.current = null;
       setActiveStream(null);
       setBusy(false);
     }
+
+    const terminal = stream.terminal;
+    if (terminal?.kind === "completed") return { status: "completed" };
+    if (terminal?.kind === "stopped") return { status: "stopped" };
+    if (terminal?.kind === "error") return {
+      status: "error",
+      message: terminal.message,
+      retryable: terminal.retryable,
+      ...(terminal.code ? { code: terminal.code } : {}),
+    };
+    return { status: "error", message: "连接意外中断", retryable: true };
   }
 
   async function appendAndCall(
@@ -209,8 +227,8 @@ export default function Home() {
     payload: RequestPayload,
     image?: LocalMessage["image"],
     options?: { replaceUiKind?: ChatUi["kind"] },
-  ) {
-    if (busy || abortRef.current) return;
+  ): Promise<ChatCallResult> {
+    if (busy || abortRef.current) return { status: "ignored" };
     const userMessage: LocalMessage = {
       id: createId("user"),
       role: "user",
@@ -219,7 +237,7 @@ export default function Home() {
       ...(image ? { image } : {}),
     };
     setMessages((current) => [...current, userMessage]);
-    await callChat(payload, { ...options, userMessageId: userMessage.id });
+    return callChat(payload, { ...options, userMessageId: userMessage.id });
   }
 
   async function sendMessage(message = input.trim(), module = activeModule) {
@@ -262,6 +280,23 @@ export default function Home() {
     }
     const request: RequestPayload = { message, action, ...(activeModule ? { module: activeModule } : {}), ...payload };
     await appendAndCall(userText, request, undefined, options);
+  }
+
+  async function decideConfirmation(
+    request: ConfirmationRequest,
+    action: ConfirmationDecisionAction,
+    finalSnapshot?: Readonly<ConfirmationSnapshot>,
+  ): Promise<ConfirmationTransportResult> {
+    const confirmation = action === "cancel"
+      ? createConfirmationCommand(request, "cancel")
+      : createConfirmationCommand(request, action, finalSnapshot ?? request.draftSnapshot);
+    const userText = action === "cancel" ? "取消本次操作" : action === "modify" ? "保存确认草稿修改" : "确认提交";
+    return appendAndCall(userText, { message: userText, confirmation }, undefined, { replaceUiKind: "confirmation" });
+  }
+
+  async function regenerateConfirmation(): Promise<ConfirmationTransportResult> {
+    const message = "请根据当前会话重新生成确认草稿";
+    return appendAndCall(message, { message, ...(activeModule ? { module: activeModule } : {}) }, undefined, { replaceUiKind: "confirmation" });
   }
 
   async function startModule(action: (typeof quickActions)[number]) {
@@ -365,6 +400,8 @@ export default function Home() {
     onTroubleshootingResolved: () => setToast("已记录问题恢复，无需创建报修"),
     onCancelConfirmation: cancelConfirmation,
     onEditConfirmation: () => { setInput("我想修改这次操作的信息："); setToast("请在输入框补充要修改的内容"); },
+    onConfirmationDecision: decideConfirmation,
+    onRegenerateConfirmation: regenerateConfirmation,
   };
 
   return (
