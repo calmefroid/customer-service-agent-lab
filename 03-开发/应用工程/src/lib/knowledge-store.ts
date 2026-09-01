@@ -33,6 +33,8 @@ declare global {
   var customerServiceKnowledgeDraftSequence: number | undefined;
   // eslint-disable-next-line no-var
   var customerServiceKnowledgeSandboxScenario: KnowledgeSandboxScenario | undefined;
+  // eslint-disable-next-line no-var
+  var customerServiceKnowledgePublishedIndex: KnowledgeIndexArticle[] | undefined;
 }
 
 const DEFAULT_EFFECTIVE_FROM = "2026-01-01T00:00:00+08:00";
@@ -236,6 +238,18 @@ function toPublishedIndex(article: StoredKnowledgeArticle): KnowledgeIndexArticl
   return { ...cloneFields(fields), id: article.id, version, status: article.status, updatedAt: publishedAt, publishedAt };
 }
 
+function rebuildPublishedIndex(): KnowledgeIndexArticle[] {
+  const index = store()
+    .map(toPublishedIndex)
+    .filter((article): article is KnowledgeIndexArticle => Boolean(article));
+  globalThis.customerServiceKnowledgePublishedIndex = index;
+  return index;
+}
+
+function publishedIndex(): KnowledgeIndexArticle[] {
+  return globalThis.customerServiceKnowledgePublishedIndex ?? rebuildPublishedIndex();
+}
+
 function nextVersion(version: string): string {
   const match = version.match(/^V(\d+)\.(\d+)$/);
   if (!match) return "V1.0";
@@ -299,6 +313,7 @@ export function publishKnowledgeArticle(id: string): KnowledgeManagedArticle | u
   article.publishedAt = now;
   article.updatedAt = now;
   article.publishedSnapshot = { ...fieldsOf(article), version, publishedAt: now };
+  rebuildPublishedIndex();
   return toManagedArticle(article);
 }
 
@@ -307,6 +322,7 @@ export function deactivateKnowledgeArticle(id: string): KnowledgeManagedArticle 
   if (!article) return undefined;
   article.status = "inactive";
   article.updatedAt = new Date().toISOString();
+  rebuildPublishedIndex();
   return toManagedArticle(article);
 }
 
@@ -341,7 +357,7 @@ export function retrievePublishedKnowledge(query: string, filters?: KnowledgeSea
   const scenario = globalThis.customerServiceKnowledgeSandboxScenario;
   if (scenario) return retrieveKnowledgeSandboxScenario(scenario, query, filters);
   return retrieveFromKnowledgeIndex({
-    articles: store().map(toPublishedIndex).filter((article): article is KnowledgeIndexArticle => Boolean(article)),
+    articles: publishedIndex(),
     query,
     filters,
     mode: "published",
@@ -371,8 +387,16 @@ export function previewKnowledge(query: string, selectedArticleId?: string, filt
   });
 }
 
+/**
+ * Sole Knowledge reset entry point for the shared Sandbox coordinator.
+ *
+ * Restores fresh seed working copies and published snapshots, resets article
+ * versions/statuses and draft numbering, rebuilds the consumer RAG index, and
+ * clears any explicitly activated conflict/expired fixture.
+ */
 export function resetKnowledgeStore(): void {
   globalThis.customerServiceKnowledgeStore = createSeedStore();
   globalThis.customerServiceKnowledgeDraftSequence = 0;
   clearKnowledgeSandboxScenario();
+  rebuildPublishedIndex();
 }
