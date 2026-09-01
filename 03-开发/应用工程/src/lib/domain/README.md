@@ -5,7 +5,7 @@
 ## 目录
 
 - `business.ts`：五类系统接口、业务对象和写入草稿。
-- `business-workflow.ts`：身份检查、订单物流聚合、草稿确认、幂等提交和人工接管。
+- `business-workflow.ts`：身份检查、订单物流聚合、订单申请准备、退换进度查询、草稿确认、幂等提交和人工接管。
 - `../adapters/*-mock-adapter.ts`：各目标系统的 Sandbox 实现。
 - `../stores/business/business-store.ts`：进程内 Mock Store，提供 `list` / `getRecord` / `reset` 和幂等写入。
 - `../stores/business/confirmation-store.ts`：服务端确认状态机，仅保存 token 摘要，记录最终快照和幂等结果。
@@ -16,10 +16,18 @@
 | 系统 | 读操作 | 写操作 |
 | --- | --- | --- |
 | PCMP | 按 SKU 取产品、搜索产品 | 无 |
-| OMS | 按编号或演示用户查订单 | 创建订单变更 / 取消申请 |
+| OMS | 按编号、演示用户或可操作状态查订单 | 创建订单变更 / 取消申请 |
 | WMS | 查履约状态与出库事件 | 无 |
 | TMS | 查运单、轨迹、承运商和电话 | 创建物流催办，同时返回 CRM 留痕来源 |
-| CRM | 查服务工单 | 退换、维修 / 安装工单、人工接管 |
+| CRM | 查退换进度与公开事件时间线、查服务工单 | 退换、维修 / 安装工单、人工接管 |
+
+## 阶段 4 查询与订单申请
+
+- `queryOrderOperationCandidate(context, options)` 仅返回当前已验证演示身份下最新的 `paid / allocated` 订单，供 00 组装地址变更或取消草稿；`shipped / delivered / cancelled` 统一拒绝写申请。
+- `prepareOrderChange` 和 `prepareOrderCancel` 只签发阶段 3 `ConfirmationRequest`。确认成功后 OMS 保存的是 `status=submitted` 的申请记录，不修改订单地址或订单状态，也不声称变更已经完成。
+- `queryReturnExchangeStatus(context, requestNo?, options)` 必须先通过演示身份校验。提供编号时只做精确匹配；不提供时只返回当前身份最近一条记录；未知编号和其他身份的编号均返回 `empty`，不会回退到相似申请。
+- CRM 退换记录由服务端根据订单写入 `customerId`，并保存结构化 `events`。查询视图只公开申请状态和事件时间线，同时在 `source` 与 `ToolResult.meta.sources` 中返回 `sourceSystem / adapterType / requestId / recordId / sourceUpdatedAt`。
+- 退换查询的 `success / empty / timeout / business_error / system_error` 继续通过 `AdapterCallOptions.outcome` 确定性注入；查询不修改 Business Store。
 
 ## 写操作协议
 

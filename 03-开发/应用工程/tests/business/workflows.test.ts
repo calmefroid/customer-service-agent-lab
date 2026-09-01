@@ -156,7 +156,7 @@ describe("business after-sales workflows", () => {
     expect(businessStore.listHumanHandoffs()).toHaveLength(1);
     businessStore.reset();
     expect(businessStore.listHumanHandoffs()).toHaveLength(0);
-    expect(businessStore.listOrders()).toHaveLength(3);
+    expect(businessStore.listOrders()).toHaveLength(4);
     expect(businessStore.listServiceTickets()).toHaveLength(1);
   });
 });

@@ -2,9 +2,11 @@ import type {
   CustomerRelationshipAdapter,
   HumanHandoffRecord,
   ReturnExchangeRecord,
+  ReturnExchangeStatusView,
   ServiceTicketRecord,
 } from "@/lib/domain/business";
 import { businessError, executeInjectedFailure, executeMock } from "@/lib/adapters/mock-adapter-utils";
+import { sourceMetadata } from "@/lib/domain/business";
 import { businessStore } from "@/lib/stores/business/business-store";
 
 export class CrmMockAdapter implements CustomerRelationshipAdapter {
@@ -31,14 +33,45 @@ export class CrmMockAdapter implements CustomerRelationshipAdapter {
         recordId: requestNo,
         requestNo,
         sourceSystem: "CRM",
+        customerId: order.customerId,
         sessionId,
         idempotencyKey,
         status: "submitted",
+        events: [{ occurredAt: now, status: "submitted", description: "退换申请已提交，等待 CRM 审核" }],
         createdAt: now,
         updatedAt: now,
       };
       const saved = businessStore.addReturnExchange(record);
       return { data: saved, records: [saved] };
+    });
+  }
+
+  getReturnExchangeStatus(
+    customerId: string,
+    requestNo?: string,
+    options?: Parameters<CustomerRelationshipAdapter["getReturnExchangeStatus"]>[2],
+  ) {
+    return executeMock<ReturnExchangeStatusView>("CRM", options, (adapterRequestId) => {
+      const record = requestNo
+        ? businessStore.getReturnExchange(requestNo)
+        : businessStore
+          .listReturnExchanges(customerId)
+          .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.requestNo.localeCompare(a.requestNo))[0];
+      if (!record || record.customerId !== customerId) return null;
+      return {
+        data: {
+          recordId: record.recordId,
+          requestNo: record.requestNo,
+          orderId: record.orderId,
+          serviceType: record.serviceType,
+          product: record.product,
+          status: record.status,
+          updatedAt: record.updatedAt,
+          events: structuredClone(record.events),
+          source: sourceMetadata("CRM", adapterRequestId, record),
+        },
+        records: [record],
+      };
     });
   }
 
