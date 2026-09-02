@@ -40,7 +40,7 @@
 
 - 不实现订单、退换、工单业务工具。
 - 不修改手机端视觉。
-- 不接入用户尚未提供的真实 API。
+- 不接入真实企业业务系统；模型 Live 仅用于本机 Smoke 与体验验证。
 
 ## 交付
 
@@ -51,9 +51,9 @@
 ## 状态
 
 ```text
-状态：阶段 5 可以开始；负责真实文字/图片模型 Smoke、fallback、停止与 Trace 脱敏
-基线：以 00 的阶段 5 准备提交为准；分支 codex/stage5-runtime-smoke
+状态：最终完成
+交付证据：9 个测试文件、92/92；真实文字/图片 Smoke、fallback、Abort 与 Trace 脱敏通过
+模型边界：统一 Qwen3.6-27B 网关，Text/Vision 逻辑 Adapter 隔离
 业务边界：PCMP / OMS / WMS / TMS / CRM 继续使用 Mock Adapter
-密钥边界：只能读取本机 .env.local；禁止输出、提交或记录 API Key
-公共契约：1.1.0 冻结；共享接线交由 00
+公共契约：1.1.0；共享接线已由 00 集成
 ```

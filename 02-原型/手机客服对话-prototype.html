@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#ffffff" />
-  <title>智享家客服 · 手机端交互原型</title>
+  <title>历史参考 · 智享家客服四入口交互原型</title>
   <script>
     // 所有演示数据集中放在这里，方便产品评审时直接修改文案。
     const mockData = {
@@ -73,6 +73,7 @@
       background: #fff; overflow: hidden; display: flex; flex-direction: column;
       box-shadow: var(--shadow); border: 1px solid rgba(23, 46, 48, .08); border-radius: 30px;
     }
+    .history-note { padding: 7px 12px; color: #76520d; background: #fff7dc; border-bottom: 1px solid #eedca7; font-size: 11px; line-height: 1.4; text-align: center; }
     .app-header {
       z-index: 5; flex: 0 0 auto; display: flex; align-items: center; gap: 11px; padding: 15px 16px 13px;
       background: rgba(255,255,255,.96); border-bottom: 1px solid var(--line); backdrop-filter: blur(16px);
@@ -220,7 +221,9 @@
   </style>
 </head>
 <body>
+  <!-- 历史参考：本文件保留早期四入口探索，不是当前产品、契约或验收依据。当前实现位于 03-开发/应用工程，消费者端只有三个公开入口，产品知识走隐藏路由。 -->
   <main class="phone" aria-label="手机端智能客服原型">
+    <div class="history-note">历史四入口原型 · 当前产品以 03-开发/应用工程为准</div>
     <header class="app-header">
       <div class="avatar"><i data-lucide="sparkles"></i></div>
       <div class="header-copy">
