@@ -52,6 +52,7 @@ pnpm --dir 03-开发/应用工程 check
 - Mock：默认模式；模型、业务系统和知识数据都可离线演示，固定 Evals 可重复运行。
 - Live：只允许本机服务从 `03-开发/应用工程/.env.local` 读取模型配置；该文件已忽略，禁止提交、截图、Trace 或报告记录凭据。
 - 统一模型：`UNIFIED_MODEL_MODE=true` 时，文字路由、低风险回答和图片理解都使用 `Qwen3.6-27B` 的 OpenAI Chat Completions 兼容网关；Text / Multimodal Adapter 仍保留独立接口，避免模型协议侵入业务层。
+- 网关兼容：两个 Live Adapter 统一通过 `chat_template_kwargs.enable_thinking=false` 关闭 Qwen3.6 思考模式，只消费最终可见正文，不暴露私有推理。
 - 业务边界：Live 模式也不连接真实 PCMP / OMS / WMS / TMS / CRM，业务执行始终通过 Mock Adapter。
 
 当前客服 VLM 契约只观察用户上传图片并返回结构化可见信息。图片生成、局部重绘或编辑接口不属于当前客服 VLM 契约，也不参与 P0 验收。

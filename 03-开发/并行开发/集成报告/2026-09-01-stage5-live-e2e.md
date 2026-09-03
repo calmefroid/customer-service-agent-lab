@@ -19,12 +19,21 @@
 
 ## 必要集成修复
 
-1. 文字与图片 Adapter 为可见完成内容保留最低输出预算；私有推理内容仍被丢弃。
+1. 文字与图片 Adapter 使用网关支持的 `chat_template_kwargs.enable_thinking=false` 关闭思考模式；移除强制 3000 token 的临时补偿，私有推理过滤仍保留。
 2. 图片 Adapter 请求结构化 JSON 对象，避免模型正文格式漂移导致观察解析失败。
 3. Live 模式使用不低于 60 秒的单模型调用门限；Mock 模式不受影响，停止生成仍通过 AbortSignal 生效。
 4. 明确、高置信的 P0 自然语言规则可覆盖有效但错误的模型猜测，并保留模型与规则 Trace。
 5. 显式 Chat action 与 ConfirmationCommand 不再先调用模型；Runtime 记录 `model: skipped` 和确定性规则事件，写操作不受供应商波动阻断。
 6. 新增显式 opt-in 的本机 Live Smoke / E2E 脚本；脚本只输出状态摘要，模型配置仍由本机服务读取。
+
+### 2026-09-02 协议修正复验
+
+在发现顶层 `enable_thinking=false` 被当前网关忽略后，文字与多模态 Adapter 统一改用 `chat_template_kwargs.enable_thinking=false`，并移除强制 3000 token 补偿。修正后复验结果：
+
+- Mock 门禁：37 个测试文件、256/256 通过，Next.js 生产构建通过。
+- 真实文字 Smoke：SSE 收到 final，路由与回答模型事件全部 completed。
+- 真实图片 Smoke：SSE 收到 final，图片观察、路由与回答模型事件全部 completed。
+- 两条 Smoke 均未检出 Authorization、API Key、图片 Data URL、未脱敏手机号或私有推理泄漏。
 
 ## 最终门禁
 

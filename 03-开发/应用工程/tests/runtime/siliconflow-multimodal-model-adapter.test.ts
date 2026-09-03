@@ -53,10 +53,11 @@ describe("OpenAICompatibleMultimodalModelAdapter", () => {
     expect(body).toMatchObject({
       model: "Qwen3.6-27B",
       stream: false,
-      max_tokens: 3000,
-      enable_thinking: false,
+      max_tokens: 1000,
+      chat_template_kwargs: { enable_thinking: false },
       response_format: { type: "json_object" },
     });
+    expect(body).not.toHaveProperty("enable_thinking");
     expect(String(init.body)).toContain("data:image/png;base64,AA==");
     expect(String(init.body)).toContain('"detail":"high"');
   });

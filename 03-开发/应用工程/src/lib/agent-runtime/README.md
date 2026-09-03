@@ -19,6 +19,7 @@ UNIFIED_MODEL_MODE=true
 TEXT_MODEL_BASE_URL=https://opai-console.opple.com/v1/chat/completions
 TEXT_MODEL_API_KEY=仅写在.env.local的密钥
 TEXT_MODEL_NAME=Qwen3.6-27B
+TEXT_MODEL_MAX_TOKENS=1000
 MULTIMODAL_MODEL_BASE_URL=https://opai-console.opple.com/v1/chat/completions
 MULTIMODAL_MODEL_NAME=Qwen3.6-27B
 MULTIMODAL_MODEL_PROVIDER=OppleAliModelGateway
@@ -29,6 +30,8 @@ MULTIMODAL_IMAGE_DETAIL=high
 `TEXT_MODEL_MODE=live` 会让真实模型负责结构化路由，并在低风险工作流完成后根据工具 / RAG 结果生成消费者回答。高风险安全话术、人工转接和写操作确认保留确定性输出。
 
 `UNIFIED_MODEL_MODE=true` 时，文字路由、回答生成和图片理解都复用 `TEXT_MODEL_BASE_URL` / `TEXT_MODEL_API_KEY` / `TEXT_MODEL_NAME`，当前统一为 `Qwen3.6-27B`。前端将 JPG / PNG / WEBP 转为 Base64 Data URL，服务端校验 MIME、大小和编码后传给模型。原始图片内容不写入 Trace，Trace 只保留文件名、类型、大小和模型观察结果。
+
+当前网关要求文字与多模态请求通过 `chat_template_kwargs.enable_thinking=false` 关闭 Qwen3.6 思考模式。不要改用顶层 `enable_thinking=false`；该字段会被网关忽略，造成 HTTP 200 但可见 `message.content` 为空。两个 Adapter 仍保留私有推理过滤，防止供应商响应漂移导致思维链进入 Trace 或消费者响应。
 
 ## 主要接口
 

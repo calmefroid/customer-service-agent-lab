@@ -11,6 +11,7 @@
 
 - 模型调用只发生在 Next.js 服务端，浏览器不直接访问供应商接口。
 - `UNIFIED_MODEL_MODE=true` 时，文字路由、低风险回答与图片理解复用同一个 `Qwen3.6-27B` OpenAI Chat Completions 兼容网关。
+- Qwen3.6 请求必须通过 `chat_template_kwargs.enable_thinking=false` 关闭思考模式；当前网关不识别顶层 `enable_thinking`。
 - TextModelAdapter 与 MultimodalModelAdapter 保持逻辑隔离，统一供应商不等于业务代码共享模型请求细节。
 - 没有本机模型配置时完整 Mock 流程仍可运行；固定 Evals 始终使用 Mock，不依赖外部服务。
 - 模型只决定或建议路由与可见回答；订单、物流、退换、工单和来源事实必须来自业务工具或 RAG。
@@ -40,6 +41,20 @@ APP_ENV
 ```
 
 统一模型模式由文字模型配置作为服务端唯一来源；独立多模态配置只在关闭统一模式时使用。文档、日志与截图不得记录配置值。
+
+### 3.1 网关请求约束
+
+文字与图片 Adapter 都必须在 Chat Completions 请求体中携带：
+
+```json
+{
+  "chat_template_kwargs": {
+    "enable_thinking": false
+  }
+}
+```
+
+顶层 `enable_thinking=false` 会被当前网关忽略。其典型症状是 HTTP 仍返回 `200`，但 `finish_reason` 为 `length`、`message.content` 为空，输出全部进入 `reasoning_content`；Runtime 随后会安全地映射为 `MODEL_UNAVAILABLE`。`TEXT_MODEL_MAX_TOKENS` 和 `MULTIMODAL_MODEL_MAX_TOKENS` 按配置值生效，不应通过强制抬高 token 上限规避协议错误。
 
 ## 4. Adapter 接口与路由
 
@@ -90,6 +105,7 @@ APP_ENV
 
 - 真实文字 Smoke：路由与低风险回答模型事件完成，消费者 final 正常。
 - 真实图片 Smoke：结构化图片观察完成，消费者 final 正常。
+- 2026-09-02 协议修正复验：改用 `chat_template_kwargs.enable_thinking=false` 后，真实文字与图片 Smoke 均收到 final，模型 Trace 全部 completed，私有推理泄漏检查为空。
 - 六条 Live 模型 + Mock 业务 E2E：6/6 通过，覆盖订单地址修改、取消订单、退换进度、物流催办、合成破损图退换和普通故障维修。
 - Mock 门禁：37 个测试文件、256/256 测试与生产构建通过。
 - 固定 Evals：36/36。
@@ -100,6 +116,7 @@ APP_ENV
 
 - 当前只验证一个 OpenAI Chat Completions 兼容网关，没有验证生产多供应商切换。
 - Live 可用性受本机网关配额、时延与服务状态影响。
+- 若网关升级请求协议，需重新验证 `chat_template_kwargs` 、可见正文与私有思考内容的边界。
 - 图片格式、大小和输出约束按当前 Sandbox 实现，尚未经过生产流量与恶意文件安全评审。
 - 未实现生产账号、RBAC、限流、审计归档、数据驻留和隐私合规流程。
 - 企业 Adapter 的字段、权限、错误码、并发与 SLA 仍需在真实系统接入阶段确认。

@@ -40,12 +40,24 @@ describe("AliTextModelAdapter", () => {
     expect(fetcher).toHaveBeenCalledOnce();
     const [, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
     expect(init.headers).toMatchObject({ Authorization: "Bearer test-key", "Content-Type": "application/json" });
-    const requestBody = JSON.parse(String(init.body)) as { model: string; stream: boolean; max_tokens: number; enable_thinking: boolean; messages: unknown[] };
-    expect(requestBody).toMatchObject({ model: "Qwen3.6-27B", stream: false, max_tokens: 3000, enable_thinking: false });
+    const requestBody = JSON.parse(String(init.body)) as {
+      model: string;
+      stream: boolean;
+      max_tokens: number;
+      chat_template_kwargs: { enable_thinking: boolean };
+      messages: unknown[];
+    };
+    expect(requestBody).toMatchObject({
+      model: "Qwen3.6-27B",
+      stream: false,
+      max_tokens: 1000,
+      chat_template_kwargs: { enable_thinking: false },
+    });
+    expect(requestBody).not.toHaveProperty("enable_thinking");
     expect(requestBody.messages).toHaveLength(2);
   });
 
-  it("keeps enough visible completion budget when a lower value is configured", async () => {
+  it("honors the configured completion budget after thinking is disabled", async () => {
     const fetcher = vi.fn(async () => jsonResponse({
       choices: [{ message: { content: "{\"module\":\"conversation\"}" } }],
     }));
@@ -67,7 +79,10 @@ describe("AliTextModelAdapter", () => {
     });
 
     const [, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
-    expect(JSON.parse(String(init.body))).toMatchObject({ max_tokens: 3000 });
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      max_tokens: 1000,
+      chat_template_kwargs: { enable_thinking: false },
+    });
   });
 
   it("generates a consumer answer from the executed workflow result", async () => {

@@ -26,7 +26,6 @@ interface ObservationPayload {
 }
 
 const FORBIDDEN_IMAGE_CONCLUSION = /可以退换|符合退换资格|退换资格已确认|责任(?:在|属于|由)|应当?赔偿|同意赔偿|(?:确认|判定)(?:为|是)?.{0,4}(?:正品|假货)|(?:就是|属于)(?:正品|假货)/;
-const MIN_VISIBLE_COMPLETION_BUDGET = 3000;
 
 function enforceObservationBoundary(observation: ObservationPayload): ObservationPayload {
   const combined = `${observation.summary} ${observation.responseText}`;
@@ -112,7 +111,7 @@ export class OpenAICompatibleMultimodalModelAdapter implements MultimodalModelAd
     this.apiKey = options.apiKey.trim();
     this.model = options.model.trim();
     this.provider = options.provider?.trim() || "OpenAICompatibleModelGateway";
-    this.maxTokens = Math.max(options.maxTokens ?? MIN_VISIBLE_COMPLETION_BUDGET, MIN_VISIBLE_COMPLETION_BUDGET);
+    this.maxTokens = options.maxTokens ?? 1000;
     this.imageDetail = options.imageDetail ?? "high";
     this.fetcher = options.fetcher ?? fetch;
     if (!this.baseUrl || !this.apiKey || !this.model) {
@@ -158,7 +157,7 @@ export class OpenAICompatibleMultimodalModelAdapter implements MultimodalModelAd
           ],
           stream: false,
           max_tokens: this.maxTokens,
-          enable_thinking: false,
+          chat_template_kwargs: { enable_thinking: false },
           response_format: { type: "json_object" },
         }),
         signal: options.signal,
